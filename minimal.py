@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import jax
 import flax.linen as nn
 import jraph
+
 from models.graph_utils import nearest_neighbors
 from models.egnn import EGNN
 
