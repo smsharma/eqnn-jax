@@ -5,12 +5,17 @@ Jax implementation of E(n) Equivariant Graph Neural Network (EGNN) following [Sa
 ## Basic usage
 
 ```py
-EGNN(message_passing_steps=3,  # Number of message-passing rounds
+from models.egnn import EGNN
+
+model = EGNN(message_passing_steps=3,  # Number of message-passing rounds
     d_hidden=32, n_layers=3, activation="gelu",  # Edge/position/velocity/scalar-update MLP attributes 
     skip_connections=False,  # Whether to use residual connections
     positions_only=True,  # Position-only (3 + scalar features) or including velocities (3 + 3 + scalar features) 
     use_fourier_features=True,  # Whether to use a Fourier feature projection of input relative coordinates
     tanh_out=False)  # Tanh-activate the position-update scalars, i.e. (x_i - x_j) * Tanh(scalars) which sometimes helps with stability
+
+rng = jax.random.PRNGKey(42)
+graph_out, params = model.init_with_output(rng, graph)  # graph is a jraph.GraphsTuple 
 ```
 ## Examples
 
