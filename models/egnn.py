@@ -46,10 +46,6 @@ def get_edge_mlp_updates(d_hidden, n_layers, activation, position_only=False, us
                 x_j, v_j, h_j = receivers[:, :3], receivers[:, 3:6], receivers[:, 6:]
                 concats = jnp.concatenate([h_i, h_j, globals], -1)
 
-        # Optionally add edge features
-        if edges is not None:
-            concats = jnp.concatenate([concats, edges], -1)
-
         # Messages from Eqs. (3) and (4)/(7)
         phi_e = MLP([d_hidden] * (n_layers), activation=activation, activate_final=True)
 
@@ -60,22 +56,6 @@ def get_edge_mlp_updates(d_hidden, n_layers, activation, position_only=False, us
         # Relative distances, optionally with Fourier features
         d_ij2 = jnp.sum((x_i - x_j) ** 2, axis=1, keepdims=True)
         d_ij2 = fourier_features(d_ij2, **fourier_feature_kwargs) if use_fourier_features else d_ij2
-
-        # ## Multi-channel experiments ##
-        # n_channels = 5
-        # X_i = repeat(x_i, "n d -> n d c", c=n_channels)
-        # X_j = repeat(x_j, "n d -> n d c", c=n_channels)
-        # D_ij2 = jnp.sum((X_i - X_j) ** 2, axis=1, keepdims=True)
-        # Phi_e = MLP([d_hidden] * (n_layers), activation=activation, activate_final=True)
-        # Phi_x_last_layer = nn.Dense(n_channels * n_channels, use_bias=False, kernel_init=jax.nn.initializers.variance_scaling(scale=1e-3, mode="fan_in", distribution="truncated_normal"))
-        # D_ij2 = jax.vmap(fourier_features, in_axes=(2), out_axes=(2))(D_ij2) if use_fourier_features else D_ij2  # FF
-        # D_ij2 = D_ij2.reshape(D_ij2.shape[0], -1)  # Flatten
-        # message_scalars = jnp.concatenate([D_ij2, concats], axis=-1)
-        # m_ij = Phi_e(message_scalars)
-        # trans = Phi_x_last_layer(phi_x(m_ij))
-        # trans = rearrange(trans, "n (c1 c2) -> n c1 c2", c1=n_channels, c2=n_channels)
-        # out = jnp.matmul((X_i - X_j), trans)  # n_dim x n_channels
-        # ## End multi-channel experiments ##
 
         # Get invariants
         message_scalars = jnp.concatenate([d_ij2, concats], axis=-1)

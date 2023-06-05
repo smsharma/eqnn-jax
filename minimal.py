@@ -13,14 +13,22 @@ n_nodes = 2000
 positions_only = False
 n_feat = 7  # 3 position + 3 velocity + 1 scalar
 
-# Select data
+# Select data; not loaded in minimal example
 x = x[:n_batch, :n_nodes, :n_feat]
 
 # Compute adjacency
 senders, receivers = jax.vmap(nearest_neighbors, in_axes=(0, None))(x[:n_batch], k)
 
 # Init graph
-graph = jraph.GraphsTuple(n_node=jnp.array(n_batch * [[n_nodes]]), n_edge=jnp.array(n_batch * [[k]]), nodes=x, edges=None, globals=jnp.ones((n_batch, 7)), senders=senders, receivers=receivers)
+graph = jraph.GraphsTuple(
+    n_node=jnp.array(n_batch * [[n_nodes]]),
+    n_edge=jnp.array(n_batch * [[k]]),
+    nodes=x,
+    edges=None,
+    globals=jnp.ones((n_batch, 7)),
+    senders=senders,
+    receivers=receivers,
+)
 
 
 # Define model
