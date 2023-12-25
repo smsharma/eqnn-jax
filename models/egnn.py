@@ -85,7 +85,7 @@ def get_edge_mlp_updates(d_hidden, n_layers, activation, position_only=False, us
             trans = jax.nn.tanh(trans)
 
         x_ij_trans = (x_i - x_j) * trans
-        x_ij_trans = jnp.clip(x_ij_trans, -100., 100.)  # From original code
+        x_ij_trans = jnp.clip(x_ij_trans, -100.0, 100.0)  # From original code
 
         return x_ij_trans, m_ij
 
@@ -147,7 +147,7 @@ def get_node_mlp_updates(d_hidden, n_layers, activation, n_edges, position_only=
                 # Apply updates
                 v_i_p = phi_v(concats) * v_i + sum_x_ij
 
-                if decouple_pos_vel_updates:  
+                if decouple_pos_vel_updates:
                     # Decouple position and velocity updates
                     phi_xx = MLP([d_hidden] * (n_layers - 1) + [1], activation=activation)
                     x_i_p = phi_xx(concats) * x_i + v_i_p
@@ -166,20 +166,19 @@ def get_node_mlp_updates(d_hidden, n_layers, activation, n_edges, position_only=
                 concats = h_i
                 if globals is not None:
                     concats = jnp.concatenate([concats, globals], -1)
-                    
+
                 # Apply updates
                 v_i_p = phi_v(concats) * v_i + sum_x_ij
 
-                if decouple_pos_vel_updates:  
+                if decouple_pos_vel_updates:
                     # Decouple position and velocity updates
                     phi_xx = MLP([d_hidden] * (n_layers - 1) + [1], activation=activation)
                     x_i_p = phi_xx(concats) * x_i + v_i_p
                 else:
                     # Assumes dynamical system with coupled position and velocity updates, as in original paper!
                     x_i_p = x_i + v_i_p
-                
 
-                h_i_p = h_i + phi_h(concats)   # Skip connection, as in original paper
+                h_i_p = h_i + phi_h(concats)  # Skip connection, as in original paper
 
                 return jnp.concatenate([x_i_p, v_i, h_i_p], -1)
 
@@ -228,41 +227,44 @@ class EGNN(nn.Module):
 
         activation = getattr(nn, self.activation)
 
-        if self.message_passing_agg not in ["sum", "mean", "mmax"]:
+        if self.message_passing_agg not in ["sum", "mean", "max"]:
             raise ValueError(f"Invalid message passing aggregation function {self.message_passing_agg}")
-        
+
         aggregate_edges_for_nodes_fn = getattr(utils, f"segment_{self.message_passing_agg}")
 
         # Apply message-passing rounds
         for _ in range(self.message_passing_steps):
             # Node and edge update functions
-            update_node_fn = get_node_mlp_updates(self.d_hidden, self.n_layers, activation, n_edges=processed_graphs.n_edge, position_only=self.positions_only, normalize_messages=self.normalize_messages, decouple_pos_vel_updates=self.decouple_pos_vel_updates)
-            update_edge_fn = get_edge_mlp_updates(self.d_hidden, self.n_layers, activation, position_only=self.positions_only, use_fourier_features=self.use_fourier_features, fourier_feature_kwargs=self.fourier_feature_kwargs, tanh_out=self.tanh_out, soft_edges=self.soft_edges)
+            update_node_fn = get_node_mlp_updates(
+                self.d_hidden, self.n_layers, activation, n_edges=processed_graphs.n_edge, position_only=self.positions_only, normalize_messages=self.normalize_messages, decouple_pos_vel_updates=self.decouple_pos_vel_updates
+            )
+            update_edge_fn = get_edge_mlp_updates(
+                self.d_hidden, self.n_layers, activation, position_only=self.positions_only, use_fourier_features=self.use_fourier_features, fourier_feature_kwargs=self.fourier_feature_kwargs, tanh_out=self.tanh_out, soft_edges=self.soft_edges
+            )
 
             # Instantiate graph network and apply EGCL
-            graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn,
-                                        aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
-            
+            graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
+
             processed_graphs = graph_net(processed_graphs)
 
-        if self.readout_agg not in ["sum", "mean", "mmax"]:
+        if self.readout_agg not in ["sum", "mean", "max"]:
             raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
 
         readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
 
         if self.task == "node":
             return processed_graphs
-        
+
         elif self.task == "graph":
-             # Aggregate residual node features; only use positions, optionally
+            # Aggregate residual node features; only use positions, optionally
             if self.readout_only_positions:
                 agg_nodes = readout_agg_fn(processed_graphs.nodes[:, :3], axis=0)
             else:
                 agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
 
             # Readout and return
-            out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs,])(agg_nodes)  
+            out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
             return out
-        
+
         else:
             raise ValueError(f"Invalid task {self.task}")

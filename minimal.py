@@ -3,7 +3,7 @@ import jax
 import flax.linen as nn
 import jraph
 
-from models.graph_utils import nearest_neighbors
+from utils.graph_utils import nearest_neighbors
 from models.egnn import EGNN
 
 # Config
