@@ -206,7 +206,7 @@ class EGNN(nn.Module):
     readout_agg: str = "mean"
     mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "graph"  # "graph" or "node"
-    readout_only_positions: bool = False  # Graph-level readout only uses positions
+    readout_only_positions: bool = False  # Graph-level readout only uses positions; otherwise use all features
     n_outputs: int = 1  # Number of outputs for graph-level readout
 
     @nn.compact
