@@ -85,6 +85,7 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
 
         m_i = e3nn.concatenate([m_i, a_i], axis=-1)
 
+        # Include velocity as steerable feature
         v_i = nodes.slice_by_mul[1:2]
         v_tilde_i = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=v_i, normalize=False)
         m_i = e3nn.concatenate([m_i, v_tilde_i], axis=-1)
