@@ -247,16 +247,16 @@ class EGNN(nn.Module):
 
             processed_graphs = graph_net(processed_graphs)
 
-        if self.readout_agg not in ["sum", "mean", "max"]:
-            raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
-
-        readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-
         if self.task == "node":
             return processed_graphs
 
         elif self.task == "graph":
             # Aggregate residual node features; only use positions, optionally
+
+            if self.readout_agg not in ["sum", "mean", "max"]:
+                raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
+
+            readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
             if self.readout_only_positions:
                 agg_nodes = readout_agg_fn(processed_graphs.nodes[:, :3], axis=0)
             else:
