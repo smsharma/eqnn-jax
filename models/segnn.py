@@ -3,6 +3,9 @@ from typing import Optional, Tuple, Union, List
 import jax.numpy as jnp
 import flax.linen as nn
 
+import jraph
+from jraph._src import utils
+
 import e3nn_jax as e3nn
 from e3nn_jax import Irreps
 from e3nn_jax import IrrepsArray
@@ -40,11 +43,6 @@ class TensorProductLinearGate(nn.Module):
 
         return out
 
-
-import jraph
-from jraph._src import utils
-
-
 def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None):
     def update_fn(
         edges: jnp.array,
@@ -53,15 +51,19 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
         globals: jnp.array,
     ) -> jnp.array:
         x_i, x_j = senders.slice_by_mul[:1], receivers.slice_by_mul[:1]  # Get position coordinates
-        m_i, m_j = senders.slice_by_mul[2:].array, receivers.slice_by_mul[2:].array  # Get masses
+        # m_i, m_j = senders.slice_by_mul[2:].array, receivers.slice_by_mul[2:].array  # Get masses
         r_ij = x_i - x_j  # Relative position vector
-        d_ij = jnp.linalg.norm(r_ij.array, axis=-1, keepdims=True) + EPS  # Distance
+        d_ij = jnp.linalg.norm(r_ij.array, axis=-1)
 
-        F_ij = m_i * m_j / d_ij**3 * r_ij  # Coulomb force
+        # F_ij = m_i * m_j / d_ij**3 * r_ij  # Coulomb force
 
-        F_tilde_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=F_ij, normalize=True)  # Project onto spherical harmonic basis
+        # F_tilde_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=F_ij, normalize=True)  # Project onto spherical harmonic basis
         a_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=r_ij, normalize=False)  # Project onto spherical harmonic basis
-        a_ij = e3nn.concatenate([a_ij, F_tilde_ij], axis=-1)  # Concatenate with Coulomb force
+        # a_ij = e3nn.concatenate([a_ij, F_tilde_ij], axis=-1)  # Concatenate with Coulomb force
+
+        # cutoff = .1
+        # d_ij = d_ij / cutoff
+        # a_ij = e3nn.concatenate([e3nn.bessel(d_ij, 4)  * e3nn.soft_envelope(d_ij)[:, None], a_ij], axis=-1)  # Concatenate with radial basis
 
         m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
 
@@ -74,7 +76,7 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
     return update_fn
 
 
-def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None):
+def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None, n_edges: int = 1, normalize_messages: bool = True):
     def update_fn(
         nodes: jnp.array,
         senders: jnp.array,
@@ -82,17 +84,18 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
         globals: jnp.array,
     ) -> jnp.array:
         m_i, a_i = receivers
+        if normalize_messages:
+            m_i, a_i = m_i / n_edges, a_i / n_edges
 
         m_i = e3nn.concatenate([m_i, a_i], axis=-1)
 
-        # Include velocity as steerable feature
-        v_i = nodes.slice_by_mul[1:2]
-        v_tilde_i = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=v_i, normalize=False)
-        m_i = e3nn.concatenate([m_i, v_tilde_i], axis=-1)
+        # # Include velocity as steerable feature
+        # v_i = nodes.slice_by_mul[1:2]
+        # v_tilde_i = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=v_i, normalize=True)
+        # m_i = e3nn.concatenate([m_i, v_tilde_i], axis=-1)
 
         for _ in range(n_layers):
             nodes = TensorProductLinearGate(irreps_out)(nodes, m_i)
-
         return nodes
 
     return update_fn
@@ -100,15 +103,16 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
 
 class SEGNN(nn.Module):
     num_message_passing_steps: int = 3
-    num_blocks: int = 2
+    num_blocks: int = 3
     irreps_hidden: Irreps = Irreps("0e")
     irreps_sh: Irreps = Irreps("0e")
+    normalize_messages: bool = True
 
     message_passing_agg: str = "mean"  # "sum", "mean", "max"
     readout_agg: str = "mean"
-    mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
+    mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
-    readout_only_positions: bool = False  # Graph-level readout only uses positions; otherwise use all features
+    readout_only_positions: bool = True  # Graph-level readout only uses positions; otherwise use all features
     n_outputs: int = 1  # Number of outputs for graph-level readout
 
     @nn.compact
@@ -118,12 +122,12 @@ class SEGNN(nn.Module):
         irreps_in = graphs.nodes.irreps
         for _ in range(self.num_message_passing_steps):
             update_edge_fn = get_edge_mlp_updates(irreps_out=self.irreps_hidden, n_layers=self.num_blocks, irreps_sh=self.irreps_sh)
-            update_node_fn = get_node_mlp_updates(irreps_out=irreps_in, n_layers=self.num_blocks, irreps_sh=self.irreps_sh)
+            update_node_fn = get_node_mlp_updates(irreps_out=self.irreps_hidden, n_layers=self.num_blocks, irreps_sh=self.irreps_sh, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge)
 
             graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
-            graphs = graph_net(graphs)
+            processed_graphs = graph_net(graphs)
 
-            graphs = graphs._replace(nodes=Linear(irreps_in)(graphs.nodes))
+            graphs = processed_graphs._replace(nodes=Linear(irreps_in)(processed_graphs.nodes))
 
         if self.task == "node":
             return graphs
