@@ -43,7 +43,7 @@ class TensorProductLinearGate(nn.Module):
 
         return out
 
-def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None):
+def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None, edge_attrs: Optional[Irreps] = None):
     def update_fn(
         edges: jnp.array,
         senders: jnp.array,
@@ -54,6 +54,9 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
         r_ij = x_i - x_j  # Relative position vector
 
         a_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=r_ij, normalize=True, normalization="component")  # Project onto spherical harmonic basis
+        
+        if edge_attrs is not None:
+            a_ij = e3nn.concatenate([a_ij, edge_attrs], axis=-1)
 
         m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
 
@@ -66,7 +69,7 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
     return update_fn
 
 
-def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None, n_edges: int = 1, normalize_messages: bool = True):
+def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None, n_edges: int = 1, normalize_messages: bool = True, node_attrs: Optional[Irreps] = None):
     def update_fn(
         nodes: jnp.array,
         senders: jnp.array,
@@ -76,6 +79,9 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
         m_i, a_i = receivers
         if normalize_messages:
             m_i, a_i = m_i / (n_edges - 1), a_i / (n_edges - 1)
+
+        if node_attrs is not None:
+            a_i = e3nn.concatenate([a_i, node_attrs], axis=-1)
 
         m_i = e3nn.concatenate([m_i, a_i], axis=-1)
 
@@ -91,8 +97,10 @@ class SEGNN(nn.Module):
     num_blocks: int = 3
     irreps_hidden: Irreps = Irreps("0e")
     irreps_sh: Irreps = Irreps("0e")
+    irreps_out: Optional[Irreps] = None
     normalize_messages: bool = True
 
+    use_vel_attrs: bool = False
     message_passing_agg: str = "mean"  # "sum", "mean", "max"
     readout_agg: str = "mean"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
@@ -101,30 +109,38 @@ class SEGNN(nn.Module):
     n_outputs: int = 1  # Number of outputs for graph-level readout
 
     @nn.compact
-    def __call__(self, graphs: jraph.GraphsTuple) -> jraph.GraphsTuple:
+    def __call__(self, graphs: jraph.GraphsTuple, node_attrs: Optional[Irreps]=None, edge_attrs: Optional[Irreps]=None) -> jraph.GraphsTuple:
         aggregate_edges_for_nodes_fn = getattr(utils, f"segment_{self.message_passing_agg}")
 
         irreps_in = graphs.nodes.irreps
-        for _ in range(self.num_message_passing_steps):
+        irreps_out = self.irreps_out if self.irreps_out is not None else irreps_in
+        
+        if self.use_vel_attrs:
+            v_i = graphs.nodes.slice_by_mul[1:2]
+            a_v_i = e3nn.spherical_harmonics(irreps_out=self.irreps_sh, input=v_i, normalize=True, normalization="component")
+            
+            if node_attrs is not None:
+                node_attrs = e3nn.concatenate([node_attrs, a_v_i], axis=-1)
+            else:
+                node_attrs = a_v_i
 
-            update_edge_fn = get_edge_mlp_updates(irreps_out=self.irreps_hidden, n_layers=self.num_blocks, irreps_sh=self.irreps_sh)
-            update_node_fn = get_node_mlp_updates(irreps_out=irreps_in, n_layers=self.num_blocks, irreps_sh=self.irreps_sh, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge)
+        for step in range(self.num_message_passing_steps):
+
+            update_edge_fn = get_edge_mlp_updates(irreps_out=self.irreps_hidden, n_layers=self.num_blocks, irreps_sh=self.irreps_sh, edge_attrs=edge_attrs)
+            update_node_fn = get_node_mlp_updates(irreps_out=irreps_in, n_layers=self.num_blocks, irreps_sh=self.irreps_sh, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge, node_attrs=node_attrs)
 
             graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
             processed_graphs = graph_net(graphs)
 
-            nodes = Linear(irreps_in)(processed_graphs.nodes)
-            # nodes = BatchNorm(instance=True)(nodes)
+            nodes = Linear(irreps_out if step == self.num_message_passing_steps - 1 else irreps_in)(processed_graphs.nodes)
 
             # Project to input irreps for good measure
             graphs = processed_graphs._replace(nodes=nodes)
 
         if self.task == "node":
             return graphs
-
         elif self.task == "graph":
             # Aggregate residual node features; only use positions, optionally
-
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
 

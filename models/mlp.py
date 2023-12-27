@@ -15,11 +15,11 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         for features in self.feature_sizes[:-1]:
-            x = nn.Dense(features)(x)
+            x = nn.Dense(features, kernel_init=nn.initializers.xavier_uniform())(x)
             x = self.activation(x)
 
         # No activation on final layer unless specified
-        x = nn.Dense(self.feature_sizes[-1])(x)
+        x = nn.Dense(self.feature_sizes[-1], kernel_init=nn.initializers.xavier_uniform())(x)
         if self.activate_final:
             x = self.activation(x)
         return x
