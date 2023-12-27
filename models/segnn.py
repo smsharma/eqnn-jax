@@ -10,7 +10,7 @@ import e3nn_jax as e3nn
 from e3nn_jax import Irreps
 from e3nn_jax import IrrepsArray
 from e3nn_jax import tensor_product
-from e3nn_jax.flax import Linear
+from e3nn_jax.flax import Linear, BatchNorm
 
 from models.mlp import MLP
 
@@ -21,7 +21,7 @@ class TensorProductLinearGate(nn.Module):
     output_irreps: Irreps = None
     bias: bool = True
     gradient_normalization: Optional[Union[str, float]] = "element"
-    path_normalization: Optional[Union[str, float]] = None
+    path_normalization: Optional[Union[str, float]] = "element"
     gate_activation: bool = True
 
     @nn.compact
@@ -57,8 +57,8 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
 
         # F_ij = m_i * m_j / d_ij**3 * r_ij  # Coulomb force
 
-        # F_tilde_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=F_ij, normalize=True)  # Project onto spherical harmonic basis
-        a_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=r_ij, normalize=False)  # Project onto spherical harmonic basis
+        # F_tilde_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=F_ij, normalize=True, normalization="component")  # Project onto spherical harmonic basis
+        a_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=r_ij, normalize=True, normalization="component")  # Project onto spherical harmonic basis
         # a_ij = e3nn.concatenate([a_ij, F_tilde_ij], axis=-1)  # Concatenate with Coulomb force
 
         # cutoff = .1
@@ -85,13 +85,13 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
     ) -> jnp.array:
         m_i, a_i = receivers
         if normalize_messages:
-            m_i, a_i = m_i / n_edges, a_i / n_edges
+            m_i, a_i = m_i / (n_edges - 1), a_i / (n_edges - 1)
 
         m_i = e3nn.concatenate([m_i, a_i], axis=-1)
 
         # # Include velocity as steerable feature
         # v_i = nodes.slice_by_mul[1:2]
-        # v_tilde_i = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=v_i, normalize=True)
+        # v_tilde_i = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=v_i, normalize=True, normalization="component")
         # m_i = e3nn.concatenate([m_i, v_tilde_i], axis=-1)
 
         for _ in range(n_layers):
@@ -121,13 +121,20 @@ class SEGNN(nn.Module):
 
         irreps_in = graphs.nodes.irreps
         for _ in range(self.num_message_passing_steps):
+
             update_edge_fn = get_edge_mlp_updates(irreps_out=self.irreps_hidden, n_layers=self.num_blocks, irreps_sh=self.irreps_sh)
-            update_node_fn = get_node_mlp_updates(irreps_out=self.irreps_hidden, n_layers=self.num_blocks, irreps_sh=self.irreps_sh, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge)
+            update_node_fn = get_node_mlp_updates(irreps_out=irreps_in, n_layers=self.num_blocks, irreps_sh=self.irreps_sh, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge)
 
             graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
             processed_graphs = graph_net(graphs)
 
-            graphs = processed_graphs._replace(nodes=Linear(irreps_in)(processed_graphs.nodes))
+            nodes = Linear(irreps_in)(processed_graphs.nodes)
+            # nodes = BatchNorm(instance=True)(nodes)
+
+            # Project to input irreps for good measure
+            graphs = processed_graphs._replace(nodes=nodes)
+
+
 
         if self.task == "node":
             return graphs
