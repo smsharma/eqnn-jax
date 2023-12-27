@@ -51,19 +51,9 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
         globals: jnp.array,
     ) -> jnp.array:
         x_i, x_j = senders.slice_by_mul[:1], receivers.slice_by_mul[:1]  # Get position coordinates
-        # m_i, m_j = senders.slice_by_mul[2:].array, receivers.slice_by_mul[2:].array  # Get masses
         r_ij = x_i - x_j  # Relative position vector
-        d_ij = jnp.linalg.norm(r_ij.array, axis=-1)
 
-        # F_ij = m_i * m_j / d_ij**3 * r_ij  # Coulomb force
-
-        # F_tilde_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=F_ij, normalize=True, normalization="component")  # Project onto spherical harmonic basis
         a_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=r_ij, normalize=True, normalization="component")  # Project onto spherical harmonic basis
-        # a_ij = e3nn.concatenate([a_ij, F_tilde_ij], axis=-1)  # Concatenate with Coulomb force
-
-        # cutoff = .1
-        # d_ij = d_ij / cutoff
-        # a_ij = e3nn.concatenate([e3nn.bessel(d_ij, 4)  * e3nn.soft_envelope(d_ij)[:, None], a_ij], axis=-1)  # Concatenate with radial basis
 
         m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
 
@@ -88,11 +78,6 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
             m_i, a_i = m_i / (n_edges - 1), a_i / (n_edges - 1)
 
         m_i = e3nn.concatenate([m_i, a_i], axis=-1)
-
-        # # Include velocity as steerable feature
-        # v_i = nodes.slice_by_mul[1:2]
-        # v_tilde_i = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=v_i, normalize=True, normalization="component")
-        # m_i = e3nn.concatenate([m_i, v_tilde_i], axis=-1)
 
         for _ in range(n_layers):
             nodes = TensorProductLinearGate(irreps_out)(nodes, m_i)
@@ -133,8 +118,6 @@ class SEGNN(nn.Module):
 
             # Project to input irreps for good measure
             graphs = processed_graphs._replace(nodes=nodes)
-
-
 
         if self.task == "node":
             return graphs
