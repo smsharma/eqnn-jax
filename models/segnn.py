@@ -76,8 +76,7 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
 
 def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None, n_edges: int = 1, normalize_messages: bool = True, node_attrs: Optional[Irreps] = None):
 
-    def update_fn(nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
-    ) -> jnp.array:
+    def update_fn(nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
         
         m_i, a_i = receivers
         if normalize_messages:
@@ -129,7 +128,7 @@ class SEGNN(nn.Module):
         
         if self.use_vel_attrs:
             v_i = graphs.nodes.slice_by_mul[1:2]
-            a_v_i = e3nn.spherical_harmonics(irreps_out=self.irreps_sh, input=v_i, normalize=True, normalization="component")
+            a_v_i = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=v_i, normalize=True, normalization="component")
             
             if node_attrs is not None:
                 node_attrs = e3nn.concatenate([node_attrs, a_v_i], axis=-1)

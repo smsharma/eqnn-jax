@@ -10,12 +10,8 @@ from models.mlp import MLP
 
 
 def get_edge_mlp_updates(d_hidden, n_layers, activation, position_only=False, use_fourier_features=False, fourier_feature_kwargs={"num_encodings": 16, "include_self": True}, tanh_out=False, soft_edges=False) -> Callable:
-    def update_fn(
-        edges: jnp.array,
-        senders: jnp.array,
-        receivers: jnp.array,
-        globals: jnp.array,
-    ) -> jnp.array:
+
+    def update_fn(edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
         """update edge features
 
         Args:
@@ -93,12 +89,8 @@ def get_edge_mlp_updates(d_hidden, n_layers, activation, position_only=False, us
 
 
 def get_node_mlp_updates(d_hidden, n_layers, activation, n_edges, position_only=False, normalize_messages=False, decouple_pos_vel_updates=False) -> Callable:
-    def update_fn(
-        nodes: jnp.array,
-        senders: jnp.array,
-        receivers: jnp.array,
-        globals: jnp.array,
-    ) -> jnp.array:
+
+    def update_fn(nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
         """update edge features
 
         Args:
