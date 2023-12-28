@@ -4,6 +4,18 @@ import jraph
 
 from functools import partial
 
+def apply_pbc(dr: np.array, cell: np.array = np.array([[1.,0.,0.,],[0.,1.,0.], [0.,0.,1.]])) -> np.array:
+    """Apply periodic boundary conditions to a displacement vector, dr, given a cell.
+
+    Args:
+        dr (np.array): An array of shape (N,3) containing the displacement vector
+        cell_matrix (np.array): A 3x3 matrix describing the box dimensions and orientation.
+
+    Returns:
+        np.array: displacement vector with periodic boundary conditions applied
+    """
+    return dr - np.round(dr.dot(np.linalg.inv(cell))).dot(cell)
+
 
 @partial(jax.jit, static_argnums=(1,))
 def nearest_neighbors(

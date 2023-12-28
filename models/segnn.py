@@ -1,4 +1,5 @@
 from typing import Optional, Tuple, Union, List
+import dataclasses
 
 import jax.numpy as jnp
 import flax.linen as nn
@@ -10,9 +11,11 @@ import e3nn_jax as e3nn
 from e3nn_jax import Irreps
 from e3nn_jax import IrrepsArray
 from e3nn_jax import tensor_product
-from e3nn_jax.flax import Linear, BatchNorm
+from e3nn_jax.flax import Linear
 
 from models.mlp import MLP
+from models.utils.irreps_utils import balanced_irreps
+from models.utils.graph_utils import apply_pbc
 
 EPS = 1e-4
 
@@ -43,15 +46,17 @@ class TensorProductLinearGate(nn.Module):
 
         return out
 
-def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None, edge_attrs: Optional[Irreps] = None):
-    def update_fn(
-        edges: jnp.array,
-        senders: jnp.array,
-        receivers: jnp.array,
-        globals: jnp.array,
-    ) -> jnp.array:
+def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None, edge_attrs: Optional[Irreps] = None, use_pbc: bool = False, norm_std: Optional[jnp.array] = None, unit_cell: Optional[jnp.array] = None):
+
+    def update_fn(edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
+
         x_i, x_j = senders.slice_by_mul[:1], receivers.slice_by_mul[:1]  # Get position coordinates
         r_ij = x_i - x_j  # Relative position vector
+
+        if use_pbc:
+            r_ij = r_ij.array * norm_std[None, :3]
+            r_ij = apply_pbc(r_ij, unit_cell)
+            r_ij = IrrepsArray("1o", r_ij / norm_std[None, :3])
 
         a_ij = e3nn.spherical_harmonics(irreps_out=irreps_sh, input=r_ij, normalize=True, normalization="component")  # Project onto spherical harmonic basis
         
@@ -70,12 +75,10 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
 
 
 def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh: Irreps = None, n_edges: int = 1, normalize_messages: bool = True, node_attrs: Optional[Irreps] = None):
-    def update_fn(
-        nodes: jnp.array,
-        senders: jnp.array,
-        receivers: jnp.array,
-        globals: jnp.array,
+
+    def update_fn(nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
     ) -> jnp.array:
+        
         m_i, a_i = receivers
         if normalize_messages:
             m_i, a_i = m_i / (n_edges - 1), a_i / (n_edges - 1)
@@ -93,13 +96,15 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_sh
 
 
 class SEGNN(nn.Module):
+    d_hidden: int = 32
+    l_max_attr: int = 2
+    l_max_sh: int = 2
     num_message_passing_steps: int = 3
     num_blocks: int = 3
-    irreps_hidden: Irreps = Irreps("0e")
-    irreps_sh: Irreps = Irreps("0e")
     irreps_out: Optional[Irreps] = None
     normalize_messages: bool = True
-
+    residual: bool = True
+    use_pbc: bool = False
     use_vel_attrs: bool = False
     message_passing_agg: str = "mean"  # "sum", "mean", "max"
     readout_agg: str = "mean"
@@ -107,9 +112,16 @@ class SEGNN(nn.Module):
     task: str = "node"  # "graph" or "node"
     readout_only_positions: bool = True  # Graph-level readout only uses positions; otherwise use all features
     n_outputs: int = 1  # Number of outputs for graph-level readout
+    norm_dict: dict = dataclasses.field(default_factory=lambda: {"mean": 0.0, "std": 1.0})
+    unit_cell: Optional[jnp.array] = None
 
     @nn.compact
-    def __call__(self, graphs: jraph.GraphsTuple, node_attrs: Optional[Irreps]=None, edge_attrs: Optional[Irreps]=None) -> jraph.GraphsTuple:
+    def __call__(self, graphs: jraph.GraphsTuple, node_attrs: Optional[Irreps]=None, edge_attrs: Optional[Irreps]=None, 
+                 norm_std: Optional[jnp.array]=None, unit_cell:  Optional[jnp.array]=None) -> jraph.GraphsTuple:
+
+        irreps_sh = Irreps.spherical_harmonics(self.l_max_sh)
+        irreps_hidden = balanced_irreps(lmax=self.l_max_attr, feature_size=self.d_hidden, use_sh=True)
+
         aggregate_edges_for_nodes_fn = getattr(utils, f"segment_{self.message_passing_agg}")
 
         irreps_in = graphs.nodes.irreps
@@ -126,16 +138,24 @@ class SEGNN(nn.Module):
 
         for step in range(self.num_message_passing_steps):
 
-            update_edge_fn = get_edge_mlp_updates(irreps_out=self.irreps_hidden, n_layers=self.num_blocks, irreps_sh=self.irreps_sh, edge_attrs=edge_attrs)
-            update_node_fn = get_node_mlp_updates(irreps_out=irreps_in, n_layers=self.num_blocks, irreps_sh=self.irreps_sh, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge, node_attrs=node_attrs)
+            update_edge_fn = get_edge_mlp_updates(irreps_out=irreps_hidden, n_layers=self.num_blocks, irreps_sh=irreps_sh, edge_attrs=edge_attrs, use_pbc=self.use_pbc, norm_std=self.norm_dict["std"], unit_cell=self.unit_cell)
+            update_node_fn = get_node_mlp_updates(irreps_out=irreps_in, n_layers=self.num_blocks, irreps_sh=irreps_sh, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge, node_attrs=node_attrs)
 
             graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
             processed_graphs = graph_net(graphs)
 
-            nodes = Linear(irreps_out if step == self.num_message_passing_steps - 1 else irreps_in)(processed_graphs.nodes)
+            # Project to original irreps
+            nodes = Linear(irreps_in)(processed_graphs.nodes)
+
+            # Residual connection
+            if self.residual:
+                nodes = nodes + graphs.nodes
 
             # Project to input irreps for good measure
             graphs = processed_graphs._replace(nodes=nodes)
+
+        if irreps_out != irreps_in:
+            graphs = graphs._replace(nodes=Linear(irreps_out)(graphs.nodes))
 
         if self.task == "node":
             return graphs
@@ -151,7 +171,7 @@ class SEGNN(nn.Module):
                 agg_nodes = readout_agg_fn(graphs.nodes.array, axis=0)
 
             # Readout and return
-            out = MLP([w * Irreps(self.irreps_hidden).num_irreps for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
+            out = MLP([w * Irreps(irreps_hidden).num_irreps for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
             return out
 
         else:

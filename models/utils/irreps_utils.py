@@ -1,3 +1,7 @@
+# From https://github.com/gerkone/segnn-jax/blob/main/segnn_jax/irreps_computer.py
+
+from math import prod
+
 from e3nn_jax import Irreps
 
 
