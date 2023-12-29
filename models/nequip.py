@@ -136,10 +136,20 @@ class NequIP(nn.Module):
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
 
+            # Distance vector; distance embedding is always used as edge attribute
+            x_i, x_j = graphs.nodes.slice_by_mul[:1][graphs.senders], graphs.nodes.slice_by_mul[:1][graphs.receivers]  # Get position coordinates
+            r_ij = x_i - x_j  # Relative position vector
+
+            # Project onto spherical harmonic basis and include as edge attribute
+            a_ij = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=r_ij, normalize=True, normalization=self.sphharm_norm)  
+            
+            # Aggregate distance embedding over neighbours to use as node attribute
+            node_attrs = e3nn.scatter_sum(a_ij, dst=graphs.receivers, output_size=graphs.nodes.shape[0])  / graphs.n_edge
+
             # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
             irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-            agg_nodes = readout_agg_fn(Linear(irreps_pre_pool)(graphs.nodes).array, axis=0)
+            agg_nodes = readout_agg_fn(Linear(irreps_pre_pool)(tensor_product(graphs.nodes, node_attrs)).array, axis=0)
 
             # Readout and return
             out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
