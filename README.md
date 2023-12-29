@@ -2,8 +2,14 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 
-> [!NOTE]  
-> WIP implementations of some equivariant neural networks in Jax. TODO: SE(3)-Transformer, vanilla MPNN, ChebConv. Move distance vector to priviledged position as attribute.
+## TODO
+
+- [ ] Double check regroup/simplify and gate scalars spec
+- [ ] Add SE(3)-Transformer
+- [ ] Add vanilla MPNN
+- [ ] Move distance vector to privileged position as attribute
+- [ ] Fold in edge features in all networks
+- [ ] [Multi-vector channel variant](https://github.com/smsharma/egnn-jax/issues/1) of EGNN
 
 Jax implementation of E(n) Equivariant Graph Neural Network (EGNN) following [Satorras et al (2021)](https://arxiv.org/abs/2102.09844).
 
@@ -30,11 +36,3 @@ Minimal example in `minimal.py`. Full example with equivariance test in `noteboo
 - The model takes either 3-D coordinates (`positions_only=True`) or 3-D coordinates and velocities (`positions_only=False`). Additional scalar nodes features and global graph attributes are handled separately.
 - The position and velocity updates (for the velocity-included version) are coupled at the moment as in the original paper (Eq. 7)
 - Can optionally use Fourier projections of relative distances with `use_fourier_features=True`
-
-## TODO
-
-- [ ] [Multi-vector channel variant](https://github.com/smsharma/egnn-jax/issues/1)
-- [ ] Decouple position and velocity updates
-- [ ] Add attention
-- [ ] Fold in edge features 
-- [ ] Benchmark
