@@ -88,7 +88,6 @@ class NequIP(nn.Module):
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
-    readout_only_positions: bool = True  # Graph-level readout only uses positions; otherwise use all features
     n_outputs: int = 1  # Number of outputs for graph-level readout
     n_radial_basis: int = 4  # Number of radial basis functions
 
@@ -127,25 +126,23 @@ class NequIP(nn.Module):
             # Update graph
             graphs = processed_graphs._replace(nodes=nodes)
 
-        # If output irreps differ from input irreps, project to output irreps
-        if irreps_out != irreps_in:
-            graphs = graphs._replace(nodes=Linear(irreps_out)(graphs.nodes))
-
         if self.task == "node":
+            # If output irreps differ from input irreps, project to output irreps
+            if irreps_out != irreps_in:
+                graphs = graphs._replace(nodes=Linear(irreps_out)(graphs.nodes))
             return graphs
         elif self.task == "graph":
-            # Aggregate residual node features; only use positions, optionally
+            # Aggregate residual node features
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
 
+            # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
+            irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-            if self.readout_only_positions:
-                agg_nodes = readout_agg_fn(graphs.nodes.slice_by_mul[:1].array, axis=0)
-            else:
-                agg_nodes = readout_agg_fn(graphs.nodes.array, axis=0)
+            agg_nodes = readout_agg_fn(Linear(irreps_pre_pool)(graphs.nodes).array, axis=0)
 
             # Readout and return
-            out = MLP([w * Irreps(irreps_hidden).num_irreps for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
+            out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
             return out
 
         else:

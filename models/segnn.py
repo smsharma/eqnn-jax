@@ -46,11 +46,19 @@ class TensorProductLinearGate(nn.Module):
 
 
 def get_edge_mlp_updates(
-    irreps_out: Irreps = None, n_layers: int = 2, irreps_attr: Irreps = None, edge_attrs: Optional[Irreps] = None, use_pbc: bool = False, norm_std: Optional[jnp.array] = None, unit_cell: Optional[jnp.array] = None, sphharm_norm: str = "component"
+    irreps_out: Irreps = None,
+    n_layers: int = 2,
+    irreps_attr: Irreps = None,
+    rel_distances: Irreps = None,
+    edge_attrs: Optional[Irreps] = None,
+    use_pbc: bool = False,
+    norm_std: Optional[jnp.array] = None,
+    unit_cell: Optional[jnp.array] = None,
+    sphharm_norm: str = "component",
 ):
     def update_fn(edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
-        x_i, x_j = senders.slice_by_mul[:1], receivers.slice_by_mul[:1]  # Get position coordinates
-        r_ij = x_i - x_j  # Relative position vector
+        m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
+        r_ij = rel_distances
 
         # Optionally apply PBC; unnormalize then normalize back
         if use_pbc:
@@ -65,8 +73,6 @@ def get_edge_mlp_updates(
             a_ij = e3nn.concatenate([a_r_ij, edge_attrs], axis=-1)
         else:
             a_ij = a_r_ij  # Otherwise, just relative positions
-
-        m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
 
         # Gated tensor product steered by geometric features attributes
         for _ in range(n_layers - 1):
@@ -106,7 +112,7 @@ class SEGNN(nn.Module):
     l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
     l_max_attr: int = 1  # Maximum spherical harmonic degree for steerable geometric features
     sphharm_norm: str = "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
-    irreps_out: Optional[Irreps] = None  # Output irreps; defaults to input irreps
+    irreps_out: Optional[Irreps] = None  # Output irreps for node-wise task; defaults to input irreps
     use_vel_attrs: bool = False  # Use velocity as steerable attribute
     normalize_messages: bool = True  # Normalize messages by number of edges
     num_message_passing_steps: int = 3  # Number of message passing steps
@@ -117,10 +123,10 @@ class SEGNN(nn.Module):
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
-    readout_only_positions: bool = True  # Graph-level readout only uses positions; otherwise use all features
     n_outputs: int = 1  # Number of outputs for graph-level readout
     norm_dict: dict = dataclasses.field(default_factory=lambda: {"mean": 0.0, "std": 1.0})  # Normalization dictionary for relative position vectors
     unit_cell: Optional[jnp.array] = None  # Unit cell for applying periodic boundary conditions; should be compatible with norm_dict
+    intermediate_hidden_irreps: bool = True  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
 
     @nn.compact
     def __call__(self, graphs: jraph.GraphsTuple, node_attrs: Optional[Irreps] = None, edge_attrs: Optional[Irreps] = None) -> jraph.GraphsTuple:
@@ -131,6 +137,10 @@ class SEGNN(nn.Module):
         irreps_hidden = balanced_irreps(lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True)  # Hidden features
         irreps_in = graphs.nodes.irreps  # Input irreps
         irreps_out = self.irreps_out if self.irreps_out is not None else irreps_in  # Output irreps, if different from input irreps
+
+        # Distance vector; distance embedding as attribute is not updated between message passing steps
+        x_i, x_j = graphs.nodes.slice_by_mul[:1][graphs.senders], graphs.nodes.slice_by_mul[:1][graphs.receivers]  # Get position coordinates
+        r_ij = x_i - x_j  # Relative position vector
 
         # Optionally use velocity as steerable attribute
         if self.use_vel_attrs:
@@ -143,46 +153,57 @@ class SEGNN(nn.Module):
             else:
                 node_attrs = a_v_i
 
+        # If specified, use hidden irreps between message passing steps; otherwise, use input irreps (bottleneck and fewer parameters)
+        irreps_intermediate = irreps_hidden if self.intermediate_hidden_irreps else irreps_in
+
         # Message passing rounds
-        for _ in range(self.num_message_passing_steps):
+        for step in range(self.num_message_passing_steps):
             update_edge_fn = get_edge_mlp_updates(
-                irreps_out=irreps_hidden, n_layers=self.num_blocks, irreps_attr=irreps_attr, edge_attrs=edge_attrs, use_pbc=self.use_pbc, norm_std=self.norm_dict["std"], unit_cell=self.unit_cell, sphharm_norm=self.sphharm_norm
+                irreps_out=irreps_hidden,
+                n_layers=self.num_blocks,
+                irreps_attr=irreps_attr,
+                edge_attrs=edge_attrs,
+                use_pbc=self.use_pbc,
+                norm_std=self.norm_dict["std"],
+                unit_cell=self.unit_cell,
+                sphharm_norm=self.sphharm_norm,
+                rel_distances=r_ij,
             )
-            update_node_fn = get_node_mlp_updates(irreps_out=irreps_in, n_layers=self.num_blocks, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge, node_attrs=node_attrs)
+            update_node_fn = get_node_mlp_updates(
+                irreps_out=irreps_intermediate if step < self.num_message_passing_steps - 1 else irreps_in,
+                n_layers=self.num_blocks,
+                normalize_messages=self.normalize_messages,
+                n_edges=graphs.n_edge,
+                node_attrs=node_attrs,
+            )
 
             # Apply steerable EGCL
             graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
             processed_graphs = graph_net(graphs)
 
-            # Project to original irreps
-            nodes = Linear(irreps_in)(processed_graphs.nodes)
-
-            # Residual connection
+            # Skip connection
             if self.residual:
-                nodes = nodes + graphs.nodes
-
-            # Update graph
-            graphs = processed_graphs._replace(nodes=nodes)
-
-        # If output irreps differ from input irreps, project to output irreps
-        if irreps_out != irreps_in:
-            graphs = graphs._replace(nodes=Linear(irreps_out)(graphs.nodes))
+                graphs = processed_graphs._replace(nodes=processed_graphs.nodes + Linear(irreps_intermediate if step < self.num_message_passing_steps - 1 else irreps_in)(graphs.nodes))
+            else:
+                graphs = processed_graphs
 
         if self.task == "node":
+            # If output irreps differ from input irreps, project to output irreps
+            if irreps_out != irreps_in:
+                graphs = graphs._replace(nodes=Linear(irreps_out)(graphs.nodes))
             return graphs
         elif self.task == "graph":
-            # Aggregate residual node features; only use positions, optionally
+            # Aggregate residual node features
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
 
+            # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
+            irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-            if self.readout_only_positions:
-                agg_nodes = readout_agg_fn(graphs.nodes.slice_by_mul[:1].array, axis=0)
-            else:
-                agg_nodes = readout_agg_fn(graphs.nodes.array, axis=0)
+            agg_nodes = readout_agg_fn(Linear(irreps_pre_pool)(graphs.nodes).array, axis=0)
 
             # Readout and return
-            out = MLP([w * Irreps(irreps_hidden).num_irreps for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
+            out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
             return out
 
         else:
