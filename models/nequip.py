@@ -38,32 +38,33 @@ def get_edge_mlp_updates(
 
     def update_fn(edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
         x_i, x_j = senders.slice_by_mul[:1], receivers.slice_by_mul[:1]  # Get position coordinates
-        r_ij = x_i - x_j  # Relative position vector
 
-        d_ij = jnp.linalg.norm(r_ij.array, axis=-1)  # Distance
+        r_ij = x_i - x_j  # Relative position vector
+        d_ij = jnp.linalg.norm(r_ij.array, axis=-1)
 
         m_ij = Linear(senders.irreps)(senders)
 
         # Angular
         a_ij = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=r_ij, normalize=True, normalization=sphharm_norm)
         m_ij = e3nn.concatenate([m_ij, a_ij])
+        m_ij = tensor_product(m_ij, a_ij)
 
-        tp = tensor_product(m_ij, a_ij)
-        R = e3nn.bessel(d_ij, n_radial_basis)
+        # Radial
+        R_ij = e3nn.bessel(d_ij, n_radial_basis)
 
-        mix = MultiLayerPerceptron(n_layers * (d_hidden,) + (tp.irreps.num_irreps,), nn.gelu, output_activation=False)(R)
+        W_R_ij = MultiLayerPerceptron(n_layers * (d_hidden,) + (m_ij.irreps.num_irreps,), nn.gelu, output_activation=False)(R_ij)
 
-        mix = mix * tp
+        m_ij = W_R_ij * m_ij
 
         # Return messages and also relative positions (to use as node attributes)
-        return mix
+        return m_ij
 
     return update_fn
 
 
-def get_node_mlp_updates(irreps_out: Irreps = None):
+def get_node_mlp_updates(irreps_out: Irreps = None, n_edges: int = 20):
     def update_fn(nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
-        m_i = receivers
+        m_i = receivers / jnp.sqrt(n_edges)
         irreps = irreps_out.filter(keep=m_i.irreps)
         gate_irreps = Irreps(f"{irreps.num_irreps - irreps.count('0e')}x0e")
         _irreps_out = (gate_irreps + irreps).regroup()
@@ -76,14 +77,14 @@ def get_node_mlp_updates(irreps_out: Irreps = None):
 
 class NequIP(nn.Module):
     d_hidden: int = 64  # Hidden dimension
-    l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
-    l_max_attr: int = 1  # Maximum spherical harmonic degree for steerable geometric features
+    l_max_hidden: int = 2  # Maximum spherical harmonic degree for hidden features
+    l_max_attr: int = 2  # Maximum spherical harmonic degree for steerable geometric features
     sphharm_norm: str = "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
     irreps_out: Optional[Irreps] = None  # Output irreps; defaults to input irreps
     normalize_messages: bool = True  # Normalize messages by number of edges
     num_message_passing_steps: int = 3  # Number of message passing steps
     n_layers: int = 3  # Number of gated tensor products in each message passing step
-    message_passing_agg: str = "mean"  # "sum", "mean", "max"
+    message_passing_agg: str = "sum"  # "sum", "mean", "max"
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
@@ -113,6 +114,7 @@ class NequIP(nn.Module):
             )
             update_node_fn = get_node_mlp_updates(
                 irreps_out=irreps_in,
+                n_edges=graphs.n_edge,
             )
 
             # Apply steerable EGCL
