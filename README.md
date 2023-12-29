@@ -1,4 +1,9 @@
-# E(n) Equivariant Graph Neural Networks (EGNN)
+# Equivariant Neural Networks in Jax
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
+
+> [!NOTE]  
+> WIP implementations of some equivariant neural networks in Jax. TODO: SE(3)-Transformer, vanilla MPNN, ChebConv. Move distance vector to priviledged position as attribute.
 
 Jax implementation of E(n) Equivariant Graph Neural Network (EGNN) following [Satorras et al (2021)](https://arxiv.org/abs/2102.09844).
 
