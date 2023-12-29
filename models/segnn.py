@@ -44,10 +44,11 @@ class TensorProductLinearGate(nn.Module):
 
         return out
 
-def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_attr: Irreps = None, edge_attrs: Optional[Irreps] = None, use_pbc: bool = False, norm_std: Optional[jnp.array] = None, unit_cell: Optional[jnp.array] = None, sphharm_norm: str = "component"):
 
+def get_edge_mlp_updates(
+    irreps_out: Irreps = None, n_layers: int = 2, irreps_attr: Irreps = None, edge_attrs: Optional[Irreps] = None, use_pbc: bool = False, norm_std: Optional[jnp.array] = None, unit_cell: Optional[jnp.array] = None, sphharm_norm: str = "component"
+):
     def update_fn(edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
-        
         x_i, x_j = senders.slice_by_mul[:1], receivers.slice_by_mul[:1]  # Get position coordinates
         r_ij = x_i - x_j  # Relative position vector
 
@@ -58,7 +59,7 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_at
             r_ij = IrrepsArray("1o", r_ij / norm_std[None, :3])
 
         a_r_ij = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=r_ij, normalize=True, normalization=sphharm_norm)  # Project onto spherical harmonic basis
-        
+
         # If additional edge attributes are provided, include them
         if edge_attrs is not None:
             a_ij = e3nn.concatenate([a_r_ij, edge_attrs], axis=-1)
@@ -71,7 +72,7 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_at
         for _ in range(n_layers - 1):
             m_ij = TensorProductLinearGate(irreps_out)(m_ij, a_ij)
         m_ij = TensorProductLinearGate(irreps_out, gate_activation=False)(m_ij, a_ij)  # No activation
-        
+
         # Return messages and also relative positions (to use as node attributes)
         return m_ij, a_r_ij
 
@@ -79,9 +80,7 @@ def get_edge_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, irreps_at
 
 
 def get_node_mlp_updates(irreps_out: Irreps = None, n_layers: int = 2, n_edges: int = 1, normalize_messages: bool = True, node_attrs: Optional[Irreps] = None):
-
     def update_fn(nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
-        
         m_i, a_i = receivers  # Messages and attributes; by default, include attributes a_i from relative position vectors as well
         if normalize_messages:
             m_i, a_i = m_i / (n_edges - 1), a_i / (n_edges - 1)
@@ -124,8 +123,7 @@ class SEGNN(nn.Module):
     unit_cell: Optional[jnp.array] = None  # Unit cell for applying periodic boundary conditions; should be compatible with norm_dict
 
     @nn.compact
-    def __call__(self, graphs: jraph.GraphsTuple, node_attrs: Optional[Irreps]=None, edge_attrs: Optional[Irreps]=None) -> jraph.GraphsTuple:
-        
+    def __call__(self, graphs: jraph.GraphsTuple, node_attrs: Optional[Irreps] = None, edge_attrs: Optional[Irreps] = None) -> jraph.GraphsTuple:
         aggregate_edges_for_nodes_fn = getattr(utils, f"segment_{self.message_passing_agg}")
 
         # Compute irreps
@@ -138,22 +136,19 @@ class SEGNN(nn.Module):
         if self.use_vel_attrs:
             v_i = graphs.nodes.slice_by_mul[1:2]
             a_v_i = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=v_i, normalize=True, normalization=self.sphharm_norm)
-            
+
             # Append to any existing node attributes
             if node_attrs is not None:
                 node_attrs = e3nn.concatenate([node_attrs, a_v_i], axis=-1)
             else:
                 node_attrs = a_v_i
-        
+
         # Message passing rounds
         for _ in range(self.num_message_passing_steps):
-
             update_edge_fn = get_edge_mlp_updates(
-                irreps_out=irreps_hidden, n_layers=self.num_blocks, irreps_attr=irreps_attr, edge_attrs=edge_attrs, use_pbc=self.use_pbc, norm_std=self.norm_dict["std"], unit_cell=self.unit_cell, sphharm_norm=self.sphharm_norm,
-                )
-            update_node_fn = get_node_mlp_updates(
-                irreps_out=irreps_in, n_layers=self.num_blocks, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge, node_attrs=node_attrs,
-                )
+                irreps_out=irreps_hidden, n_layers=self.num_blocks, irreps_attr=irreps_attr, edge_attrs=edge_attrs, use_pbc=self.use_pbc, norm_std=self.norm_dict["std"], unit_cell=self.unit_cell, sphharm_norm=self.sphharm_norm
+            )
+            update_node_fn = get_node_mlp_updates(irreps_out=irreps_in, n_layers=self.num_blocks, normalize_messages=self.normalize_messages, n_edges=graphs.n_edge, node_attrs=node_attrs)
 
             # Apply steerable EGCL
             graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
