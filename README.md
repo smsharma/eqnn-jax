@@ -9,8 +9,6 @@
 
 - [ ] Double check regroup/simplify and gate scalars spec
 - [ ] Move distance vector to privileged position as attribute
-- [ ] Fold in edge features in all networks
-- [ ] [Multi-vector channel variant](https://github.com/smsharma/egnn-jax/issues/1) of EGNN
 
 > [!CAUTION]  
 > Old README below.
