@@ -27,7 +27,7 @@ from models.utils.graph_utils import apply_pbc
 
 
 def get_edge_mlp_updates(
-    irreps_out: Irreps = None,
+    rel_distance: Irreps,
     irreps_attr: Irreps = None,
     sphharm_norm: str = "component",
     n_layers: int = 2,
@@ -37,15 +37,11 @@ def get_edge_mlp_updates(
     # irreps_out = irreps_out.regroup()
 
     def update_fn(edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
-        x_i, x_j = senders.slice_by_mul[:1], receivers.slice_by_mul[:1]  # Get position coordinates
-
-        r_ij = x_i - x_j  # Relative position vector
-        d_ij = jnp.linalg.norm(r_ij.array, axis=-1)
-
+        d_ij = jnp.linalg.norm(rel_distance.array, axis=-1)
         m_ij = Linear(senders.irreps)(senders)
 
         # Angular
-        a_ij = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=r_ij, normalize=True, normalization=sphharm_norm)
+        a_ij = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=rel_distance, normalize=True, normalization=sphharm_norm)
         m_ij = e3nn.concatenate([m_ij, a_ij])
         m_ij = tensor_product(m_ij, a_ij)
 
@@ -101,10 +97,14 @@ class NequIP(nn.Module):
         irreps_in = graphs.nodes.irreps  # Input irreps
         irreps_out = self.irreps_out if self.irreps_out is not None else irreps_in  # Output irreps, if different from input irreps
 
+        # Distance vector; distance embedding is always used as edge attribute
+        x_i, x_j = graphs.nodes.slice_by_mul[:1][graphs.senders], graphs.nodes.slice_by_mul[:1][graphs.receivers]  # Get position coordinates
+        r_ij = x_i - x_j  # Relative position vector
+
         # Message passing rounds
         for _ in range(self.num_message_passing_steps):
             update_edge_fn = get_edge_mlp_updates(
-                irreps_out=irreps_hidden,
+                rel_distance=r_ij,
                 d_hidden=self.d_hidden,
                 n_layers=self.n_layers,
                 irreps_attr=irreps_attr,
@@ -136,15 +136,9 @@ class NequIP(nn.Module):
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
 
-            # Distance vector; distance embedding is always used as edge attribute
-            x_i, x_j = graphs.nodes.slice_by_mul[:1][graphs.senders], graphs.nodes.slice_by_mul[:1][graphs.receivers]  # Get position coordinates
-            r_ij = x_i - x_j  # Relative position vector
-
-            # Project onto spherical harmonic basis and include as edge attribute
-            a_ij = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=r_ij, normalize=True, normalization=self.sphharm_norm)  
-            
-            # Aggregate distance embedding over neighbours to use as node attribute
-            node_attrs = e3nn.scatter_sum(a_ij, dst=graphs.receivers, output_size=graphs.nodes.shape[0])  / graphs.n_edge
+            # Aggregate distance embedding over neighbours to use as node attribute for readout
+            a_ij = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=r_ij, normalize=True, normalization=self.sphharm_norm)
+            node_attrs = e3nn.scatter_sum(a_ij, dst=graphs.receivers, output_size=graphs.nodes.shape[0]) / graphs.n_edge
 
             # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
             irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
