@@ -2,7 +2,9 @@ import sys
 
 sys.path.append("../models")
 sys.path.append("../")
+
 import jax
+import jax.numpy as jnp
 import numpy as np
 import flax.linen as nn
 import jraph
@@ -72,14 +74,24 @@ def transform_graph(
     )
 
 
-def is_model_equivariant(data, model, params, equivariant = True, use_irreps=False,):
-    transformed_data = transform_graph(data.nodes, use_irreps=use_irreps,)
-    output_original = model.apply(params, data)
-    output_original_transformed = apply_transformation(output_original.nodes)
+def is_model_equivariant(data, model, params, should_be_equivariant = True, use_irreps=False, rtol=2.e-1):
+    transformed_data = transform_graph(
+        data.nodes if not use_irreps else data.nodes.array, 
+        use_irreps=use_irreps,
+    )
+    output_original = model.apply(params, data).nodes
+    output_original_transformed = apply_transformation(
+        output_original if not use_irreps else output_original.array
+    )
     output_transformed = model.apply(params, transformed_data).nodes
-    if equivariant:
-        assert np.allclose(output_transformed, output_original_transformed, rtol=5.0e-2)
-    assert ~np.allclose(output_transformed, output_original_transformed, rtol=5.0e-2)
+    if use_irreps:
+        output_original = output_original.array
+        output_transformed = output_transformed.array
+    # Make sure output original sufficiently different from output trasnformed
+    assert ~np.allclose(output_original, output_transformed, rtol=rtol)
+    if should_be_equivariant:
+        assert np.allclose(output_transformed, output_original_transformed, rtol=rtol)
+    assert ~np.allclose(output_transformed, output_original_transformed, rtol=rtol)
     
 
 def test_not_equivariant_gnn(node_features,):
@@ -95,7 +107,7 @@ def test_not_equivariant_gnn(node_features,):
     )
     rng = jax.random.PRNGKey(0)
     params = model.init(rng, dummy_graph)
-    is_model_equivariant(dummy_graph, model, params, equivariant=False, use_irreps=False,)
+    is_model_equivariant(dummy_graph, model, params, should_be_equivariant=False, use_irreps=False,)
 
 def test_equivariant_egnn(node_features):
     dummy_graph = create_dummy_graph(node_features=node_features,k=5,use_irreps=False,)
