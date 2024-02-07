@@ -236,7 +236,6 @@ class EGNN(nn.Module):
 
             # Instantiate graph network and apply EGCL
             graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
-
             processed_graphs = graph_net(processed_graphs)
 
         if self.task == "node":
