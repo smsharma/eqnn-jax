@@ -1,5 +1,5 @@
 import numpy as np
-import pathlib
+from pathlib import Path
 import os
 
 class GravityDataset():
@@ -8,17 +8,18 @@ class GravityDataset():
 
     """
 
-    def __init__(self, partition='train', max_samples=1e8, dataset_name="nbody_small", neighbours=6, target="pos"):
+    def __init__(self, n=5, partition='train', max_samples=1e8, dataset_name="nbody_small", neighbours=6, target="pos", data_path = 'data'):
         self.partition = partition
+        self.data_path = data_path
         if self.partition == 'val':
             self.suffix = 'valid'
         else:
             self.suffix = self.partition
         self.dataset_name = dataset_name
         if dataset_name == "nbody":
-            self.suffix += "_gravity100_initvel1"
+            self.suffix += f"_gravity{n}_initvel1"
         elif dataset_name == "nbody_small" or dataset_name == "nbody_small_out_dist":
-            self.suffix += "_gravity100_initvel1small"
+            self.suffix += f"_gravity{n}_initvel1small"
         else:
             raise Exception("Wrong dataset name %s" % self.dataset_name)
 
@@ -39,13 +40,12 @@ class GravityDataset():
             raise Exception("Wrong dataset partition %s" % self.dataset_name)
 
     def load(self):
-        filepath = pathlib.Path(__file__).parent.resolve()
+        filepath = Path(self.data_path)
 
-        loc = np.load(os.path.join(filepath, 'dataset', 'loc_' + self.suffix + '.npy'))
-        vel = np.load(os.path.join(filepath, 'dataset', 'vel_' + self.suffix + '.npy'))
-        force = np.load(os.path.join(filepath, 'dataset', 'force_' + self.suffix + '.npy'))
-        mass = np.load(os.path.join(filepath, 'dataset', 'mass_' + self.suffix + '.npy'))
-
+        loc = np.load(filepath  / f'loc_{self.suffix}.npy')
+        vel = np.load(filepath  / f'vel_{self.suffix}.npy')
+        force = np.load(filepath  / f'edges_{self.suffix}.npy')
+        mass = np.load(filepath  / f'charges_{self.suffix}.npy')
         self.num_nodes = loc.shape[-1]
 
         loc, vel, force, mass = self.preprocess(loc, vel, force, mass)
