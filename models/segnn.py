@@ -124,8 +124,10 @@ class SEGNN(nn.Module):
     act_gates: str = "sigmoid"  # Activation function for gate scalars
 
     @nn.compact
-    def __call__(self, graphs: jraph.GraphsTuple, node_attrs: Optional[Irreps] = None, edge_attrs: Optional[Irreps] = None) -> jraph.GraphsTuple:
+    def __call__(self, graphs: jraph.GraphsTuple,):# node_attrs: Optional[Irreps] = None, edge_attrs: Optional[Irreps] = None) -> jraph.GraphsTuple:
         # Compute irreps
+        node_attrs, edge_attrs = graphs.node_attributes, graphs.edge_attributes
+        graphs = graphs.graph
         irreps_attr = Irreps.spherical_harmonics(self.l_max_attr)  # For steerable geometric features
         irreps_hidden = balanced_irreps(lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True)  # For hidden features
         irreps_in = graphs.nodes.irreps  # Input irreps
