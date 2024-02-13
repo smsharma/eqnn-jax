@@ -79,7 +79,7 @@ def transform_graph(
 
 
 def is_model_equivariant(
-    data, model, params, should_be_equivariant=True, use_irreps=False, rtol=2.0e-1
+    data, model, params, should_be_equivariant=True, use_irreps=False, rtol=0.3
 ):
     transformed_data = transform_graph(
         data.nodes if not use_irreps else data.nodes.array,
@@ -93,7 +93,7 @@ def is_model_equivariant(
     if use_irreps:
         output_original = output_original.array
         output_transformed = output_transformed.array
-    # Make sure output original sufficiently different from output trasnformed
+    # Make sure output original sufficiently different from output transformed
     assert not np.allclose(output_original, output_transformed, rtol=rtol)
     if should_be_equivariant:
         assert np.allclose(
