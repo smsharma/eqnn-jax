@@ -1,12 +1,13 @@
 import time
 from functools import partial
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Dict
 
 import haiku as hk
 import jax
 import jax.numpy as jnp
 import jraph
 import optax
+import flax.linen as nn
 from jax import jit
 
 from dataset import setup_nbody_data, SteerableGraphsTuple
@@ -64,36 +65,21 @@ def weight_balanced_irreps(
     return Irreps(irreps_left)
 
 
-@partial(jit, static_argnames=["model_fn", "criterion", "do_mask", "eval_trn"])
+@partial(jit, static_argnames=["model_fn", "criterion",  "eval_trn"])
 def loss_fn_wrapper(
     params: hk.Params,
     st_graph: SteerableGraphsTuple,
     target: jnp.ndarray,
     model_fn: Callable,
     criterion: Callable,
-    do_mask: bool = True,
     eval_trn: Callable = None,
 ) -> Tuple[float, hk.State]:
-    pred = model_fn(params, st_graph).nodes
+    pred = model_fn(params, st_graph).nodes.array
+    jax.debug.print('pred = {x}', x=pred)
     if eval_trn is not None:
         pred = eval_trn(pred)
-
-    if do_mask:
-        if target.shape == st_graph.graph.nodes.shape:
-            mask = jraph.get_node_padding_mask(st_graph.graph)
-        else:
-            mask = jraph.get_graph_padding_mask(st_graph.graph)
-        # broadcast mask for vector targets
-        if len(pred.shape) == 2:
-            mask = mask[:, jnp.newaxis]
-    else:
-        mask = jnp.ones_like(target)
-
-    target = target * mask
-    pred = pred * mask
-
     assert target.shape == pred.shape
-    return jnp.sum(criterion(pred, target)) / jnp.count_nonzero(mask)
+    return jnp.sum(criterion(pred, target)) 
 
 
 @partial(jit, static_argnames=["loss_fn", "opt_update"])
@@ -139,7 +125,7 @@ def train(
     loss_fn,
     eval_loss_fn,
     graph_transform,
-    n_steps=1_000,
+    n_steps=5,
     lr=5.0e-3,
     lr_scheduling=True,
     weight_decay=1.0e-12,
@@ -188,11 +174,13 @@ def train(
             target=target,
             opt_state=opt_state,
         )
+        jax.debug.print('loss = {x} ', x=loss)
         if step % eval_every == 0:
             print(
                 f"[Step {step}] train loss {loss:.6f}",
                 end="",
             )
+            print()
     """
             eval_time, val_loss = eval_fn(loader_val, params, segnn_state)
             if val_loss < best_val:
@@ -215,6 +203,17 @@ def train(
     )
     """
 
+class GraphWrapper(nn.Module):
+    model_name: str
+    param_dict: Dict
+    
+    @nn.compact
+    def __call__(self, x):
+        if self.model_name == 'SEGNN':
+            return SEGNN(**self.param_dict)(x)
+        else:
+            raise ValueError('Please specify a valid model name.')
+
 
 if __name__ == "__main__":
     key = jax.random.PRNGKey(1337)
@@ -222,25 +221,25 @@ if __name__ == "__main__":
     hidden_units = 64
     lmax_attributes = 1
     lmax_hidden = 1
-    num_message_passing_steps = 4
-    intermediate_hidden_irreps = True
-    batch_size = 1
-
+    batch_size = 20 
     node_irreps = e3nn.Irreps("2x1o + 1x0e")
     output_irreps = e3nn.Irreps("1x1o")
     additional_message_irreps = e3nn.Irreps("2x0e")
     attr_irreps = e3nn.Irreps.spherical_harmonics(lmax_attributes)
+    hidden_irreps = balanced_irreps(lmax=lmax_hidden, feature_size=hidden_units, use_sh=True)
 
-    hidden_irreps = weight_balanced_irreps(
-        scalar_units=hidden_units,
-        irreps_right=attr_irreps,
-        use_sh=True,
-        lmax=lmax_hidden,
-    )
-    segnn = SEGNN(
-        num_message_passing_steps=num_message_passing_steps,
-        intermediate_hidden_irreps=intermediate_hidden_irreps,
-        task=task,
+    segnn_params = {
+        'num_message_passing_steps': 4,
+        'intermediate_hidden_irreps': False, 
+        'task': 'node',
+        'irreps_out': output_irreps,
+        'normalize_messages': False
+
+    }
+
+    segnn = GraphWrapper(
+        model_name='SEGNN',
+        param_dict=segnn_params,
     )
 
     loader_train, loader_val, loader_test, graph_transform = setup_nbody_data(
@@ -248,12 +247,16 @@ if __name__ == "__main__":
         additional_message_irreps=additional_message_irreps,
         batch_size=batch_size,
     )
+    print('total')
+    print(len(next(iter(loader_train))))
+    print('0 element')
+    print(next(iter(loader_train))[0].shape)
 
     def _mse(p, t):
         return jnp.power(p - t, 2)
 
-    train_loss = partial(loss_fn_wrapper, criterion=_mse, do_mask=False)
-    eval_loss = partial(loss_fn_wrapper, criterion=_mse, do_mask=False)
+    train_loss = partial(loss_fn_wrapper, criterion=_mse,)
+    eval_loss = partial(loss_fn_wrapper, criterion=_mse,)
 
     train(
         key,

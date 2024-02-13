@@ -33,6 +33,8 @@ def create_dummy_graph(
     )
     n_node = np.array([len(node_feat) for node_feat in node_features])
     if use_irreps:
+        # subtract mean position
+        #node_features = node_features.at[...,:2].set(node_features[...,:2] - np.mean(node_features[...,:2], axis=1, keepdims=True))
         node_features = IrrepsArray("1o + 1o + 1x0e", node_features)
     return jraph.GraphsTuple(
         n_node=n_node,
@@ -47,9 +49,7 @@ def create_dummy_graph(
 
 @pytest.fixture
 def node_features():
-    return np.random.randn(2, 5, 7)
-
-
+    return jnp.array(np.random.randn(2, 5, 7))
 
 def apply_transformation(
     x, angle_deg=45.0, axis=np.array([0, 1 / np.sqrt(2), 1 / np.sqrt(2)])
@@ -74,7 +74,7 @@ def transform_graph(
     )
 
 
-def is_model_equivariant(data, model, params, should_be_equivariant = True, use_irreps=False, rtol=2.e-1):
+def is_model_equivariant(data, model, params, should_be_equivariant = True, use_irreps=False, rtol=1.e-1):
     transformed_data = transform_graph(
         data.nodes if not use_irreps else data.nodes.array, 
         use_irreps=use_irreps,
@@ -88,10 +88,11 @@ def is_model_equivariant(data, model, params, should_be_equivariant = True, use_
         output_original = output_original.array
         output_transformed = output_transformed.array
     # Make sure output original sufficiently different from output trasnformed
-    assert ~np.allclose(output_original, output_transformed, rtol=rtol)
+    assert not np.allclose(output_original, output_transformed, rtol=rtol)
     if should_be_equivariant:
-        assert np.allclose(output_transformed, output_original_transformed, rtol=rtol)
-    assert ~np.allclose(output_transformed, output_original_transformed, rtol=rtol)
+        assert np.allclose(np.array(output_transformed), np.array(output_original_transformed), rtol=rtol)
+    else:
+        assert not np.allclose(output_transformed, output_original_transformed, rtol=rtol)
     
 
 def test_not_equivariant_gnn(node_features,):

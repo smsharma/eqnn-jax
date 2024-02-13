@@ -261,7 +261,6 @@ def NbodyGraphTransform(
     dataset_name: str,
     n_nodes: int,
     batch_size: int,
-    neighbours: Optional[int] = 6,
     relative_target: bool = False,
 ) -> Callable:
     """
@@ -333,7 +332,6 @@ def setup_nbody_data(
     max_samples=3000,
     n_bodies=5,
     batch_size=100,
-    neighbours=None,
     target="pos",
 ):
     if dataset == "charged":
@@ -364,7 +362,6 @@ def setup_nbody_data(
         transform=o3_transform,
         n_nodes=n_bodies,
         batch_size=batch_size,
-        neighbours=neighbours,
         relative_target=(target == "pos"),
         dataset_name=dataset,
     )

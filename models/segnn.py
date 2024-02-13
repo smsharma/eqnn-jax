@@ -56,11 +56,14 @@ def get_edge_mlp_updates(
     irreps_out: Irreps = None,
     n_layers: int = 2,
     edge_attrs: Optional[Irreps] = None,
+    additional_message_features: Optional[jnp.array]  = None,
     act_scalars: str = "gelu",
     act_gates: str = "sigmoid",
 ):
     def update_fn(edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
         m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
+        if additional_message_features is not None:
+            m_ij = e3nn.concatenate([m_ij, additional_message_features], axis=-1)
         a_ij = edge_attrs  # Attributes
 
         # Gated tensor product steered by geometric features attributes
@@ -89,7 +92,6 @@ def get_node_mlp_updates(
             a_i /= n_edges - 1
 
         m_i = e3nn.concatenate([m_i, a_i], axis=-1)  # Eq. 8 of 2110.02905
-
         # Gated tensor product steered by geometric feature messages
         for _ in range(n_layers - 1):
             nodes = TensorProductLinearGate(irreps_out)(nodes, m_i)
@@ -124,10 +126,8 @@ class SEGNN(nn.Module):
     act_gates: str = "sigmoid"  # Activation function for gate scalars
 
     @nn.compact
-    def __call__(self, graphs: jraph.GraphsTuple,):# node_attrs: Optional[Irreps] = None, edge_attrs: Optional[Irreps] = None) -> jraph.GraphsTuple:
+    def __call__(self, graphs: jraph.GraphsTuple, node_attrs: Optional[Irreps] = None, edge_attrs: Optional[Irreps] = None) -> jraph.GraphsTuple:
         # Compute irreps
-        node_attrs, edge_attrs = graphs.node_attributes, graphs.edge_attributes
-        graphs = graphs.graph
         irreps_attr = Irreps.spherical_harmonics(self.l_max_attr)  # For steerable geometric features
         irreps_hidden = balanced_irreps(lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True)  # For hidden features
         irreps_in = graphs.nodes.irreps  # Input irreps
@@ -142,13 +142,18 @@ class SEGNN(nn.Module):
             r_ij = r_ij.array * self.norm_dict["std"][None, :3]
             r_ij = apply_pbc(r_ij, self.unit_cell)
             r_ij = IrrepsArray("1o", r_ij / self.norm_dict["std"][None, :3])
-
+        # include absolute distances as additional message features
+        d_ij = jnp.sqrt(jnp.sum(r_ij.array ** 2, axis=-1, keepdims=True))  # Absolute distance
+        additional_message_features = IrrepsArray(
+            "0e",
+            d_ij,
+        )
         # Project relative distance vectors onto spherical harmonic basis and include as edge attribute
         a_r_ij = e3nn.spherical_harmonics(irreps_out=irreps_attr, input=r_ij, normalize=True, normalization=self.sphharm_norm)
         edge_attrs = a_r_ij
 
         # Aggregate distance embedding over neighbours to use as node attribute
-        a_i = e3nn.scatter_sum(a_r_ij, dst=graphs.receivers, output_size=graphs.nodes.shape[0])
+        a_i = e3nn.scatter_mean(a_r_ij, dst=graphs.receivers, output_size=graphs.nodes.shape[0])
 
         # Append to any existing node attributes
         node_attrs = a_i if node_attrs is None else e3nn.concatenate([a_i, node_attrs], axis=-1)
@@ -171,6 +176,7 @@ class SEGNN(nn.Module):
                 irreps_out=irreps_hidden,
                 n_layers=self.num_blocks,
                 edge_attrs=edge_attrs,
+                additional_message_features=additional_message_features,
                 act_scalars=self.act_scalars,
                 act_gates=self.act_gates,
             )
