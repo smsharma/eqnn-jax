@@ -93,7 +93,7 @@ def update(
 ) -> Tuple[float, hk.Params, hk.State, optax.OptState]:
     loss, grads = jax.value_and_grad(
         loss_fn,
-    )(params, graph, target)
+    )(params, graph.graph, target)
     updates, opt_state = opt_update(grads, opt_state, params)
     return loss, optax.apply_updates(params, updates), opt_state
 
@@ -125,14 +125,14 @@ def train(
     loss_fn,
     eval_loss_fn,
     graph_transform,
-    n_steps=5,
+    n_steps=200,
     lr=5.0e-3,
     lr_scheduling=True,
     weight_decay=1.0e-12,
     eval_every=100,
 ):
     init_graph, _ = graph_transform(next(iter(loader_train)))
-    params = segnn.init(key, init_graph)
+    params = segnn.init(key, init_graph.graph)
     print(
         f"Starting {n_steps} steps"
         f"with {hk.data_structures.tree_size(params)} parameters.\n"
@@ -221,7 +221,7 @@ if __name__ == "__main__":
     hidden_units = 64
     lmax_attributes = 1
     lmax_hidden = 1
-    batch_size = 20 
+    batch_size = 1 
     node_irreps = e3nn.Irreps("2x1o + 1x0e")
     output_irreps = e3nn.Irreps("1x1o")
     additional_message_irreps = e3nn.Irreps("2x0e")
@@ -233,7 +233,7 @@ if __name__ == "__main__":
         'intermediate_hidden_irreps': False, 
         'task': 'node',
         'irreps_out': output_irreps,
-        'normalize_messages': False
+        'normalize_messages': True, 
 
     }
 

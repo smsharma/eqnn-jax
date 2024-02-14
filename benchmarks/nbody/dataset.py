@@ -205,11 +205,12 @@ def O3Transform(
         )
 
         vel_abs = jnp.sqrt(jnp.power(vel, 2).sum(1, keepdims=True))
-        mean_loc = loc.mean(1, keepdims=True)
+        #mean_loc = loc.mean(1, keepdims=True)
 
         nodes = e3nn.IrrepsArray(
             node_features_irreps,
-            jnp.concatenate((loc - mean_loc, vel, vel_abs), axis=-1),
+            #jnp.concatenate((loc - mean_loc, vel, vel_abs), axis=-1),
+            jnp.concatenate((loc, vel, vel_abs), axis=-1),
         )
 
         if not scn:
