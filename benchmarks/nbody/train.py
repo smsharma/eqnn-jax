@@ -247,11 +247,6 @@ if __name__ == "__main__":
         additional_message_irreps=additional_message_irreps,
         batch_size=batch_size,
     )
-    print('total')
-    print(len(next(iter(loader_train))))
-    print('0 element')
-    print(next(iter(loader_train))[0].shape)
-
     def _mse(p, t):
         return jnp.power(p - t, 2)
 
