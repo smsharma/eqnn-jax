@@ -68,7 +68,7 @@ def get_edge_mlp_updates(
     n_layers: int = 2,
     edge_attrs: Optional[Irreps] = None,
     additional_message_features: Optional[jnp.array] = None,
-    act_scalars: str = "gelu",
+    act_scalars: str = "silu",
     act_gates: str = "sigmoid",
 ):
     def update_fn(
@@ -99,6 +99,8 @@ def get_node_mlp_updates(
     n_edges: int = 1,
     normalize_messages: bool = True,
     node_attrs: Optional[Irreps] = None,
+    act_scalars: str = "silu",
+    act_gates: str = "sigmoid",
 ):
     def update_fn(
         nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
@@ -112,7 +114,7 @@ def get_node_mlp_updates(
         m_i = e3nn.concatenate([m_i, nodes], axis=-1)  # Eq. 8 of 2110.02905
         # Gated tensor product steered by geometric feature messages
         for _ in range(n_layers - 1):
-            nodes = TensorProductLinearGate(irreps_out)(m_i, a_i)
+            nodes = TensorProductLinearGate(irreps_out, act_scalars=act_scalars, act_gates=act_gates,)(m_i, a_i)
         nodes = TensorProductLinearGate(irreps_out, gate_activation=False)(
             m_i, a_i 
         )  # No activation
@@ -247,6 +249,8 @@ class SEGNN(nn.Module):
                 normalize_messages=self.normalize_messages,
                 n_edges=graphs.n_edge,
                 node_attrs=node_attrs,
+                act_scalars=self.act_scalars,
+                act_gates=self.act_gates,
             )
 
             # Apply steerable EGCL
