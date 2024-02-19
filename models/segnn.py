@@ -76,7 +76,8 @@ def get_edge_mlp_updates(
     ) -> jnp.array:
         to_concat = [senders, receivers]
         if additional_message_features is not None:
-            m_ij = e3nn.concatenate(to_concat, axis=-1)  # Messages
+            to_concat.append(additional_message_features)
+        m_ij = e3nn.concatenate(to_concat, axis=-1)  # Messages
         a_ij = edge_attrs  # Attributes
         # Gated tensor product steered by geometric features attributes
         for layer in range(n_layers - 1):
@@ -108,14 +109,13 @@ def get_node_mlp_updates(
             m_i /= n_edges - 1
             a_i /= n_edges - 1
 
-        m_i = e3nn.concatenate([m_i, a_i], axis=-1)  # Eq. 8 of 2110.02905
+        m_i = e3nn.concatenate([m_i, nodes], axis=-1)  # Eq. 8 of 2110.02905
         # Gated tensor product steered by geometric feature messages
         for _ in range(n_layers - 1):
-            nodes = TensorProductLinearGate(irreps_out)(nodes, m_i)
+            nodes = TensorProductLinearGate(irreps_out)(m_i, a_i)
         nodes = TensorProductLinearGate(irreps_out, gate_activation=False)(
-            nodes, m_i
+            m_i, a_i 
         )  # No activation
-
         return nodes
 
     return update_fn
@@ -127,7 +127,7 @@ class SEGNN(nn.Module):
     l_max_attr: int = (
         1  # Maximum spherical harmonic degree for steerable geometric features
     )
-    sphharm_norm: str = "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
+    sphharm_norm: str = None #"component"  # Normalization for spherical harmonics; "component", "integral", "norm"
     irreps_out: Optional[
         Irreps
     ] = None  # Output irreps for node-wise task; defaults to input irreps
@@ -137,7 +137,7 @@ class SEGNN(nn.Module):
     num_blocks: int = 3  # Number of gated tensor products in each message passing step
     residual: bool = True  # Residual connections
     use_pbc: bool = False  # Use periodic boundary conditions when computing relative position vectors
-    message_passing_agg: str = "mean"  # "sum", "mean", "max"
+    message_passing_agg: str = "sum"  # "sum", "mean", "max"
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
@@ -149,7 +149,7 @@ class SEGNN(nn.Module):
         jnp.array
     ] = None  # Unit cell for applying periodic boundary conditions; should be compatible with norm_dict
     intermediate_hidden_irreps: bool = False  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
-    act_scalars: str = "gelu"  # Activation function for scalars
+    act_scalars: str = "silu"  # Activation function for scalars
     act_gates: str = "sigmoid"  # Activation function for gate scalars
 
     @nn.compact
@@ -191,10 +191,10 @@ class SEGNN(nn.Module):
             graphs.nodes.slice_by_mul[-1:][graphs.senders],
             graphs.nodes.slice_by_mul[-1:][graphs.receivers],
         )
-        q_ij = q_i * q_j
+        q_ij = q_i.array * q_j.array
         additional_message_features = IrrepsArray(
             "2x0e",
-            jnp.concatenate([d_ij[...,None], q_ij[...,None]], axis=-1),
+            jnp.concatenate([d_ij, q_ij], axis=-1),
         )
         # Project relative distance vectors onto spherical harmonic basis and include as edge attribute
         a_r_ij = e3nn.spherical_harmonics(
@@ -206,13 +206,8 @@ class SEGNN(nn.Module):
         edge_attrs = a_r_ij
 
         # Aggregate distance embedding over neighbours to use as node attribute
-        a_i = e3nn.scatter_mean(
+        node_attrs = e3nn.scatter_mean(
             a_r_ij, dst=graphs.receivers, output_size=graphs.nodes.shape[0]
-        )
-
-        # Append to any existing node attributes
-        node_attrs = (
-            a_i if node_attrs is None else e3nn.concatenate([a_i, node_attrs], axis=-1)
         )
 
         # Optionally use velocity as steerable node attribute
@@ -224,7 +219,7 @@ class SEGNN(nn.Module):
                 normalize=True,
                 normalization=self.sphharm_norm,
             )
-            node_attrs = e3nn.concatenate([node_attrs, a_v_i], axis=-1)
+            node_attrs += a_v_i #e3nn.concatenate([node_attrs, a_v_i], axis=-1)
 
         # If specified, use hidden irreps between message passing steps; otherwise, use input irreps (bottleneck and fewer parameters)
         irreps_intermediate = (

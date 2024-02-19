@@ -223,7 +223,7 @@ if __name__ == "__main__":
     hidden_units = 64
     lmax_attributes = 1
     lmax_hidden = 1
-    batch_size = 30 
+    batch_size = 100 
     node_irreps = e3nn.Irreps("2x1o + 1x0e")
     output_irreps = e3nn.Irreps("1x1o")
     additional_message_irreps = e3nn.Irreps("2x0e")
@@ -235,7 +235,9 @@ if __name__ == "__main__":
         'intermediate_hidden_irreps': False, 
         'task': 'node',
         'irreps_out': output_irreps,
-        'normalize_messages': True, 
+        'normalize_messages': False, 
+        'use_vel_attrs': True,
+        'message_passing_agg': 'mean',
 
     }
 
