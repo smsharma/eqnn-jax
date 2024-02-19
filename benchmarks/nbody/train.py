@@ -118,10 +118,10 @@ def train(
     loader_test,
     loss_fn,
     graph_transform,
-    n_steps=10_000,
-    lr=5.0e-3,
+    n_steps=10_000_000,
+    lr=1.0e-4,
     lr_scheduling=True,
-    weight_decay=1.0e-12,
+    weight_decay=1.0e-8,
     eval_every=500,
 ):
     init_data = next(iter(loader_train))
@@ -221,7 +221,8 @@ if __name__ == "__main__":
         'd_hidden': hidden_units,
         'l_max_hidden': lmax_hidden,
         'l_max_attr': lmax_attributes,
-        'num_message_passing_steps': 7,
+        'num_blocks': 2,
+        'num_message_passing_steps': 4,
         'intermediate_hidden_irreps': False, 
         'task': 'node',
         'irreps_out': output_irreps,
