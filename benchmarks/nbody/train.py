@@ -80,7 +80,7 @@ def loss_fn_wrapper(
     if eval_trn is not None:
         pred = eval_trn(pred)
     assert target.shape == pred.shape
-    return jnp.sum(criterion(pred, target)) 
+    return jnp.mean(criterion(pred, target)) 
 
 
 @partial(jit, static_argnames=["loss_fn", "opt_update"])

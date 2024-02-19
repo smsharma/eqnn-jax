@@ -182,10 +182,14 @@ def NbodyGraphTransform(
     ) -> Tuple[SteerableGraphsTuple, jnp.ndarray]:
         _ = training
         loc, vel, _, q, targets = data
+        # substract center of the system:
+        loc = loc - loc.mean(axis=1, keepdims=True)
         senders, receivers = full_edge_indices[:,:,0], full_edge_indices[:,:, 1]
+        vel_modulus = jnp.linalg.norm(vel, axis=-1, keepdims=True)
+        print('charges = ', q)
         st_graph = SteerableGraphsTuple(
             graph=GraphsTuple(
-                nodes=e3nn.IrrepsArray("1o",loc),
+                nodes=e3nn.IrrepsArray("1o + 1o + 2x0e",jnp.concatenate([loc, vel, vel_modulus, q], axis=-1)),
                 edges=None,
                 senders=senders,
                 receivers=receivers,
@@ -195,7 +199,6 @@ def NbodyGraphTransform(
             )
         )
         targets = targets - loc
-
         return st_graph, targets
 
     return _to_steerable_graph

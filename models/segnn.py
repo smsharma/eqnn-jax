@@ -191,6 +191,8 @@ class SEGNN(nn.Module):
             "0e",
             d_ij,
         )
+        jax.debug.print('charges with slice = ', graphs.nodes.slice_by_mul[-1:])
+        
         # Project relative distance vectors onto spherical harmonic basis and include as edge attribute
         a_r_ij = e3nn.spherical_harmonics(
             irreps_out=irreps_attr,
