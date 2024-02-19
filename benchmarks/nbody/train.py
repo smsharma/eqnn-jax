@@ -118,7 +118,7 @@ def train(
     loader_test,
     loss_fn,
     graph_transform,
-    n_steps=150_000,
+    n_steps=10_000,
     lr=5.0e-3,
     lr_scheduling=True,
     weight_decay=1.0e-12,
@@ -179,19 +179,17 @@ def train(
                 best_val = val_loss
                 tag = " (best)"
                 test_loss_ckp = eval_fn(loader_test, params=params,) 
+            else:
+                tag = ""
 
             print(f" - val loss {val_loss:.6f}{tag}", end="")
             print()
 
-    test_loss = 0
-    _, test_loss = eval_fn(loader_test, params=params, )
+    test_loss = eval_fn(loader_test, params=params, )
     # ignore compilation time
-    avg_time = avg_time[1:] if len(avg_time) > 1 else avg_time
-    avg_time = sum(avg_time) / len(avg_time)
     print(
         "Training done.\n"
         f"Final test loss {test_loss:.6f} - checkpoint test loss {test_loss_ckp:.6f}.\n"
-        f"Average (model) eval time {avg_time:.2f}ms"
     )
 
 class GraphWrapper(nn.Module):
@@ -220,7 +218,10 @@ if __name__ == "__main__":
     hidden_irreps = balanced_irreps(lmax=lmax_hidden, feature_size=hidden_units, use_sh=True)
 
     segnn_params = {
-        'num_message_passing_steps': 4,
+        'd_hidden': hidden_units,
+        'l_max_hidden': lmax_hidden,
+        'l_max_attr': lmax_attributes,
+        'num_message_passing_steps': 7,
         'intermediate_hidden_irreps': False, 
         'task': 'node',
         'irreps_out': output_irreps,
