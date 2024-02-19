@@ -74,20 +74,18 @@ def get_edge_mlp_updates(
     def update_fn(
         edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
     ) -> jnp.array:
-        m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
+        to_concat = [senders, receivers]
         if additional_message_features is not None:
-            m_ij = e3nn.concatenate([m_ij, additional_message_features], axis=-1)
+            m_ij = e3nn.concatenate(to_concat, axis=-1)  # Messages
         a_ij = edge_attrs  # Attributes
-
         # Gated tensor product steered by geometric features attributes
-        for _ in range(n_layers - 1):
+        for layer in range(n_layers - 1):
             m_ij = TensorProductLinearGate(
                 irreps_out, act_scalars=act_scalars, act_gates=act_gates
             )(m_ij, a_ij)
         m_ij = TensorProductLinearGate(irreps_out, gate_activation=False)(
             m_ij, a_ij
         )  # No activation
-
         # Return messages
         return m_ij
 

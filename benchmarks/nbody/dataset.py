@@ -12,6 +12,7 @@ import e3nn_jax as e3nn
 import jax_dataloader as jdl
 
 
+
 class BaseDataset(jdl.Dataset, ABC):
     """Abstract n-body dataset class."""
 
@@ -139,9 +140,7 @@ class ChargedDataset(BaseDataset):
 
     def __getitem__(self, i: Union[Sequence, int]) -> Tuple[np.ndarray, ...]:
         frame_0, frame_target = self._get_partition_frames()
-
         loc, vel, edge_attr, charges = self.data
-
         loc, vel, edge_attr, charges, target_loc = (
             loc[i, frame_0],
             vel[i, frame_0],
@@ -149,15 +148,6 @@ class ChargedDataset(BaseDataset):
             charges[i],
             loc[i, frame_target],
         )
-
-        if not isinstance(i, int):
-            # flatten batch and nodes dimensions
-            loc = loc.reshape(-1, *loc.shape[2:])
-            vel = vel.reshape(-1, *vel.shape[2:])
-            edge_attr = edge_attr.reshape(-1, *edge_attr.shape[2:])
-            charges = charges.reshape(-1, *charges.shape[2:])
-            target_loc = target_loc.reshape(-1, *target_loc.shape[2:])
-
         return loc, vel, edge_attr, charges, target_loc
 
 
@@ -172,93 +162,8 @@ class SteerableGraphsTuple(NamedTuple):
     additional_message_features: Optional[e3nn.IrrepsArray] = None
 
 
-def O3Transform(
-    node_features_irreps: e3nn.Irreps,
-    edge_features_irreps: e3nn.Irreps,
-    lmax_attributes: int,
-    scn: bool = False,
-) -> Callable:
-    """
-    Build a transformation function that includes (nbody) O3 attributes to a graph.
-    """
-    # TODO: why is this a boolean?
-    if not scn:
-        attribute_irreps = e3nn.Irreps.spherical_harmonics(lmax_attributes)
-    else:
-        attribute_irreps = e3nn.Irrep("1o")
-
-    @jax.jit
-    def _o3_transform(
-        st_graph: SteerableGraphsTuple,
-        loc: jnp.ndarray,
-        vel: jnp.ndarray,
-        charges: jnp.ndarray,
-    ) -> SteerableGraphsTuple:
-        graph = st_graph.graph
-        prod_charges = charges[graph.senders] * charges[graph.receivers]
-        rel_pos = loc[graph.senders] - loc[graph.receivers]
-        edge_dist = jnp.sqrt(jnp.power(rel_pos, 2).sum(1, keepdims=True))
-
-        msg_features = e3nn.IrrepsArray(
-            edge_features_irreps,
-            jnp.concatenate((edge_dist, prod_charges), axis=-1),
-        )
-
-        vel_abs = jnp.sqrt(jnp.power(vel, 2).sum(1, keepdims=True))
-        #mean_loc = loc.mean(1, keepdims=True)
-
-        nodes = e3nn.IrrepsArray(
-            node_features_irreps,
-            #jnp.concatenate((loc - mean_loc, vel, vel_abs), axis=-1),
-            jnp.concatenate((loc, vel, vel_abs), axis=-1),
-        )
-
-        if not scn:
-            edge_attributes = e3nn.spherical_harmonics(
-                attribute_irreps, rel_pos, normalize=True, normalization="integral"
-            )
-            vel_embedding = e3nn.spherical_harmonics(
-                attribute_irreps, vel, normalize=True, normalization="integral"
-            )
-        else:
-            edge_attributes = e3nn.IrrepsArray(attribute_irreps, rel_pos)
-            vel_embedding = e3nn.IrrepsArray(attribute_irreps, vel)
-
-        # scatter edge attributes
-        sum_n_node = tree.tree_leaves(nodes)[0].shape[0]
-        node_attributes = (
-            tree.tree_map(
-                lambda e: segment_mean(e, graph.receivers, sum_n_node),
-                edge_attributes,
-            )
-            + vel_embedding
-        )
-        if not scn:
-            # scalar attribute to 1 by default
-            node_attributes = e3nn.IrrepsArray(
-                node_attributes.irreps, node_attributes.array.at[:, 0].set(1.0)
-            )
-
-        return SteerableGraphsTuple(
-            graph=GraphsTuple(
-                nodes=nodes,
-                edges=None,
-                senders=graph.senders,
-                receivers=graph.receivers,
-                n_node=graph.n_node,
-                n_edge=graph.n_edge,
-                globals=graph.globals,
-            ),
-            node_attributes=node_attributes,
-            edge_attributes=edge_attributes,
-            additional_message_features=msg_features,
-        )
-
-    return _o3_transform
-
 
 def NbodyGraphTransform(
-    transform: Callable,
     dataset_name: str,
     n_nodes: int,
     batch_size: int,
@@ -270,41 +175,26 @@ def NbodyGraphTransform(
 
     if dataset_name == "charged":
         # charged system is a connected graph
-        full_edge_indices = jnp.array(
-            [
-                (i + n_nodes * b, j + n_nodes * b)
-                for b in range(batch_size)
-                for i in range(n_nodes)
-                for j in range(n_nodes)
-                if i != j
-            ]
-        ).T
+        edges = [(i, j) for i in range(n_nodes) for j in range(n_nodes) if i!=j] 
+        full_edge_indices = jnp.array([edges for _ in range(batch_size)])
 
     def _to_steerable_graph(
         data: List, training: bool = True
     ) -> Tuple[SteerableGraphsTuple, jnp.ndarray]:
         _ = training
         loc, vel, _, q, targets = data
-
-        cur_batch = int(loc.shape[0] / n_nodes)
-
-        if dataset_name == "charged":
-            edge_indices = full_edge_indices[:, : n_nodes * (n_nodes - 1) * cur_batch]
-            senders, receivers = edge_indices[0], edge_indices[1]
+        senders, receivers = full_edge_indices[:,:,0], full_edge_indices[:,:, 1]
         st_graph = SteerableGraphsTuple(
             graph=GraphsTuple(
-                nodes=None,
+                nodes=e3nn.IrrepsArray("1o",loc),
                 edges=None,
                 senders=senders,
                 receivers=receivers,
-                n_node=jnp.array([n_nodes] * cur_batch),
-                n_edge=jnp.array([len(senders) // cur_batch] * cur_batch),
+                n_node=jnp.array([n_nodes] * len(loc)),
+                n_edge=jnp.array([senders.shape[-1]]*len(loc)),
                 globals=None,
             )
         )
-        st_graph = transform(st_graph, loc, vel, q)
-
-        # relative shift as target
         if relative_target:
             targets = targets - loc
 
@@ -352,15 +242,7 @@ def setup_nbody_data(
             dataset_name=dataset_name,
             n_bodies=n_bodies,
         )
-
-    o3_transform = O3Transform(
-        node_irreps,
-        additional_message_irreps,
-        lmax_attributes,
-        scn=o3_layer == "scn",
-    )
     graph_transform = NbodyGraphTransform(
-        transform=o3_transform,
         n_nodes=n_bodies,
         batch_size=batch_size,
         relative_target=(target == "pos"),

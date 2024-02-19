@@ -75,7 +75,6 @@ def loss_fn_wrapper(
     eval_trn: Callable = None,
 ) -> Tuple[float, hk.State]:
     pred = model_fn(params, st_graph).nodes.array
-    jax.debug.print('pred = {x}', x=pred)
     if eval_trn is not None:
         pred = eval_trn(pred)
     assert target.shape == pred.shape
@@ -125,14 +124,15 @@ def train(
     loss_fn,
     eval_loss_fn,
     graph_transform,
-    n_steps=200,
+    n_steps=1_000,
     lr=5.0e-3,
     lr_scheduling=True,
     weight_decay=1.0e-12,
     eval_every=100,
 ):
-    init_graph, _ = graph_transform(next(iter(loader_train)))
-    params = segnn.init(key, init_graph.graph)
+    init_data = next(iter(loader_train))
+    init_graph, _ = graph_transform(init_data)
+    params = segnn.init(key, init_graph.graph,)
     print(
         f"Starting {n_steps} steps"
         f"with {hk.data_structures.tree_size(params)} parameters.\n"
@@ -174,7 +174,6 @@ def train(
             target=target,
             opt_state=opt_state,
         )
-        jax.debug.print('loss = {x} ', x=loss)
         if step % eval_every == 0:
             print(
                 f"[Step {step}] train loss {loss:.6f}",
@@ -210,7 +209,7 @@ class GraphWrapper(nn.Module):
     @nn.compact
     def __call__(self, x):
         if self.model_name == 'SEGNN':
-            return SEGNN(**self.param_dict)(x)
+            return jax.vmap(SEGNN(**self.param_dict))(x)
         else:
             raise ValueError('Please specify a valid model name.')
 
@@ -221,7 +220,7 @@ if __name__ == "__main__":
     hidden_units = 64
     lmax_attributes = 1
     lmax_hidden = 1
-    batch_size = 1 
+    batch_size = 3 
     node_irreps = e3nn.Irreps("2x1o + 1x0e")
     output_irreps = e3nn.Irreps("1x1o")
     additional_message_irreps = e3nn.Irreps("2x0e")
