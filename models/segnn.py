@@ -187,12 +187,15 @@ class SEGNN(nn.Module):
         d_ij = jnp.sqrt(
             jnp.sum(r_ij.array**2, axis=-1, keepdims=True)
         )  # Absolute distance
-        additional_message_features = IrrepsArray(
-            "0e",
-            d_ij,
+        q_i, q_j = (
+            graphs.nodes.slice_by_mul[-1:][graphs.senders],
+            graphs.nodes.slice_by_mul[-1:][graphs.receivers],
         )
-        jax.debug.print('charges with slice = ', graphs.nodes.slice_by_mul[-1:])
-        
+        q_ij = q_i * q_j
+        additional_message_features = IrrepsArray(
+            "2x0e",
+            jnp.concatenate([d_ij[...,None], q_ij[...,None]], axis=-1),
+        )
         # Project relative distance vectors onto spherical harmonic basis and include as edge attribute
         a_r_ij = e3nn.spherical_harmonics(
             irreps_out=irreps_attr,

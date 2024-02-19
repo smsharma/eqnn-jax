@@ -186,7 +186,6 @@ def NbodyGraphTransform(
         loc = loc - loc.mean(axis=1, keepdims=True)
         senders, receivers = full_edge_indices[:,:,0], full_edge_indices[:,:, 1]
         vel_modulus = jnp.linalg.norm(vel, axis=-1, keepdims=True)
-        print('charges = ', q)
         st_graph = SteerableGraphsTuple(
             graph=GraphsTuple(
                 nodes=e3nn.IrrepsArray("1o + 1o + 2x0e",jnp.concatenate([loc, vel, vel_modulus, q], axis=-1)),
