@@ -1,5 +1,7 @@
 import time
 from functools import partial
+import itertools
+
 from typing import Callable, Tuple, Dict
 
 import haiku as hk
@@ -124,7 +126,7 @@ def train(
     loss_fn,
     eval_loss_fn,
     graph_transform,
-    n_steps=1_000,
+    n_steps=15_000,
     lr=5.0e-3,
     lr_scheduling=True,
     weight_decay=1.0e-12,
@@ -164,6 +166,7 @@ def train(
     best_val = 1e10
 
     iter_loader = iter(loader_train)
+    iter_loader = itertools.cycle(iter_loader)
 
     for step in range(n_steps):
         data = next(iter_loader)
@@ -220,7 +223,7 @@ if __name__ == "__main__":
     hidden_units = 64
     lmax_attributes = 1
     lmax_hidden = 1
-    batch_size = 3 
+    batch_size = 30 
     node_irreps = e3nn.Irreps("2x1o + 1x0e")
     output_irreps = e3nn.Irreps("1x1o")
     additional_message_irreps = e3nn.Irreps("2x0e")

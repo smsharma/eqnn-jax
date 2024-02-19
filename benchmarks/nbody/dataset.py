@@ -167,7 +167,6 @@ def NbodyGraphTransform(
     dataset_name: str,
     n_nodes: int,
     batch_size: int,
-    relative_target: bool = False,
 ) -> Callable:
     """
     Build a function that converts torch DataBatch into SteerableGraphsTuple.
@@ -195,8 +194,7 @@ def NbodyGraphTransform(
                 globals=None,
             )
         )
-        if relative_target:
-            targets = targets - loc
+        targets = targets - loc
 
         return st_graph, targets
 
@@ -245,7 +243,6 @@ def setup_nbody_data(
     graph_transform = NbodyGraphTransform(
         n_nodes=n_bodies,
         batch_size=batch_size,
-        relative_target=(target == "pos"),
         dataset_name=dataset,
     )
     loader_train = jdl.DataLoader(
