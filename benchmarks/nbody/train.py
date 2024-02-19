@@ -74,11 +74,8 @@ def loss_fn_wrapper(
     target: jnp.ndarray,
     model_fn: Callable,
     criterion: Callable,
-    eval_trn: Callable = None,
 ) -> Tuple[float, hk.State]:
     pred = model_fn(params, st_graph).nodes.array
-    if eval_trn is not None:
-        pred = eval_trn(pred)
     assert target.shape == pred.shape
     return jnp.mean(criterion(pred, target)) 
 
@@ -102,19 +99,15 @@ def update(
 def evaluate(
     loader,
     params: hk.Params,
-    state: hk.State,
     loss_fn: Callable,
     graph_transform: Callable,
 ) -> Tuple[float, float]:
     eval_loss = 0.0
-    eval_times = 0.0
     for data in loader:
         graph, target = graph_transform(data, training=False)
-        eval_start = time.perf_counter_ns()
-        loss, _ = jax.lax.stop_gradient(loss_fn(params, state, graph, target))
+        loss = jax.lax.stop_gradient(loss_fn(params, graph.graph, target))
         eval_loss += jax.block_until_ready(loss)
-        eval_times += (time.perf_counter_ns() - eval_start) / 1e6
-    return eval_times / len(loader), eval_loss / len(loader)
+    return eval_loss / len(loader)
 
 
 def train(
@@ -124,13 +117,12 @@ def train(
     loader_val,
     loader_test,
     loss_fn,
-    eval_loss_fn,
     graph_transform,
-    n_steps=15_000,
+    n_steps=150_000,
     lr=5.0e-3,
     lr_scheduling=True,
     weight_decay=1.0e-12,
-    eval_every=100,
+    eval_every=500,
 ):
     init_data = next(iter(loader_train))
     init_graph, _ = graph_transform(init_data)
@@ -158,9 +150,8 @@ def train(
     model_fn = jit(segnn.apply)
 
     loss_fn = partial(loss_fn, model_fn=model_fn)
-    eval_loss_fn = partial(eval_loss_fn, model_fn=model_fn)
     update_fn = partial(update, loss_fn=loss_fn, opt_update=opt_update)
-    eval_fn = partial(evaluate, loss_fn=eval_loss_fn, graph_transform=graph_transform)
+    eval_fn = partial(evaluate, loss_fn=loss_fn, graph_transform=graph_transform)
 
     opt_state = opt_init(params)
     best_val = 1e10
@@ -183,18 +174,17 @@ def train(
                 end="",
             )
             print()
-    """
-            eval_time, val_loss = eval_fn(loader_val, params, segnn_state)
+            val_loss = eval_fn(loader_val, params=params, )
             if val_loss < best_val:
                 best_val = val_loss
                 tag = " (best)"
-                _, test_loss_ckp = eval_fn(loader_test, params, segnn_state)
+                test_loss_ckp = eval_fn(loader_test, params=params,) 
 
-            print(f" - val loss {val_loss:.6f}{tag}, infer {eval_time:.2f}ms", end="")
-        print()
+            print(f" - val loss {val_loss:.6f}{tag}", end="")
+            print()
 
     test_loss = 0
-    _, test_loss = eval_fn(loader_test, params, segnn_state)
+    _, test_loss = eval_fn(loader_test, params=params, )
     # ignore compilation time
     avg_time = avg_time[1:] if len(avg_time) > 1 else avg_time
     avg_time = sum(avg_time) / len(avg_time)
@@ -203,7 +193,6 @@ def train(
         f"Final test loss {test_loss:.6f} - checkpoint test loss {test_loss_ckp:.6f}.\n"
         f"Average (model) eval time {avg_time:.2f}ms"
     )
-    """
 
 class GraphWrapper(nn.Module):
     model_name: str
@@ -254,16 +243,14 @@ if __name__ == "__main__":
     def _mse(p, t):
         return jnp.power(p - t, 2)
 
-    train_loss = partial(loss_fn_wrapper, criterion=_mse,)
-    eval_loss = partial(loss_fn_wrapper, criterion=_mse,)
+    loss_fn = partial(loss_fn_wrapper, criterion=_mse,)
 
     train(
-        key,
-        segnn,
-        loader_train,
-        loader_val,
-        loader_test,
-        train_loss,
-        eval_loss,
-        graph_transform,
+        key=key,
+        segnn=segnn,
+        loader_train=loader_train,
+        loader_val=loader_val,
+        loader_test=loader_test,
+        loss_fn=loss_fn,
+        graph_transform=graph_transform,
     )
