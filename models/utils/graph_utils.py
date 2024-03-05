@@ -4,7 +4,21 @@ import jraph
 
 from functools import partial
 
-def apply_pbc(dr: np.array, cell: np.array = np.array([[1.,0.,0.,],[0.,1.,0.], [0.,0.,1.]])) -> np.array:
+
+def apply_pbc(
+    dr: np.array,
+    cell: np.array = np.array(
+        [
+            [
+                1.0,
+                0.0,
+                0.0,
+            ],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    ),
+) -> np.array:
     """Apply periodic boundary conditions to a displacement vector, dr, given a cell.
 
     Args:
@@ -57,7 +71,9 @@ def nearest_neighbors(
     return (sources, targets)
 
 
-def add_graphs_tuples(graphs: jraph.GraphsTuple, other_graphs: jraph.GraphsTuple) -> jraph.GraphsTuple:
+def add_graphs_tuples(
+    graphs: jraph.GraphsTuple, other_graphs: jraph.GraphsTuple
+) -> jraph.GraphsTuple:
     """Adds the nodes, edges and global features from other_graphs to graphs."""
     return graphs._replace(nodes=graphs.nodes + other_graphs.nodes)
 
@@ -113,3 +129,5 @@ def fourier_features(x, num_encodings=8, include_self=True):
     x = np.concatenate([np.sin(x), np.cos(x)], axis=-1)
     x = np.concatenate((x, orig_x), axis=-1) if include_self else x
     return x
+
+

@@ -10,9 +10,11 @@ import flax.linen as nn
 import jraph
 from models.gnn import GNN
 from models.egnn import EGNN
-from models.segnn import SEGNN
+from models.segnn import SEGNN, TensorProductLinearGate
 from e3nn_jax import IrrepsArray
+from e3nn_jax import Irreps
 from utils.graph_utils import nearest_neighbors, rotate_representation
+from utils.equivariant_graph_utils import get_equivariant_graph
 
 import pytest
 
@@ -39,15 +41,34 @@ def create_dummy_graph(
         # subtract mean position
         # node_features = node_features.at[...,:2].set(node_features[...,:2] - np.mean(node_features[...,:2], axis=1, keepdims=True))
         node_features = IrrepsArray("1o + 1o + 1x0e", node_features)
-    return jraph.GraphsTuple(
-        n_node=n_node,
-        n_edge=np.array(len(node_features) * [[k]]),
-        nodes=node_features,
-        edges=None,
-        globals=None,
-        senders=sources,
-        receivers=targets,
-    )
+        positions, velocities = node_features[..., :3], node_features[..., 3:6]
+        additional_messages = None
+        edges = None
+        return get_equivariant_graph(
+            node_features=node_features,
+            positions=positions,
+            velocities=velocities,
+            senders=sources,
+            receivers=targets,
+            n_node=n_node,
+            n_edge=np.array(len(node_features) * [[k]]),
+            edges=edges,
+            globals=None,
+            lmax_attributes=1,
+            additional_messages=additional_messages,
+        )
+    else:
+        nodes = node_features
+        edges = None
+        return jraph.GraphsTuple(
+            n_node=n_node,
+            n_edge=np.array(len(node_features) * [[k]]),
+            nodes=nodes,
+            edges=edges,
+            globals=None,
+            senders=sources,
+            receivers=targets,
+        )
 
 
 @pytest.fixture
@@ -79,17 +100,17 @@ def transform_graph(
 
 
 def is_model_equivariant(
-    data, model, params, should_be_equivariant=True, use_irreps=False, rtol=0.3
+    data, model, params, should_be_equivariant=True, use_irreps=False, rtol=0.05
 ):
     transformed_data = transform_graph(
         data.nodes if not use_irreps else data.nodes.array,
         use_irreps=use_irreps,
     )
     output_original = model.apply(params, data).nodes
+    output_transformed = model.apply(params, transformed_data).nodes
     output_original_transformed = apply_transformation(
         output_original if not use_irreps else output_original.array
     )
-    output_transformed = model.apply(params, transformed_data).nodes
     if use_irreps:
         output_original = output_original.array
         output_transformed = output_transformed.array
@@ -164,6 +185,42 @@ def test_equivariant_egnn(node_features):
     )
 
 
+def test_equivariant_embedding_for_segnn(node_features):
+    dummy_graph = create_dummy_graph(
+        node_features=node_features,
+        k=5,
+        use_irreps=True,
+    )
+
+    class Embedding(nn.Module):
+        irreps_out: Irreps("1o")
+
+        @nn.compact
+        def __call__(
+            self,
+            graphs,
+        ):
+            nodes = TensorProductLinearGate(
+                output_irreps=self.irreps_out, activation=False
+            )(graphs.nodes, graphs.steerable_node_attrs)
+            graphs = graphs._replace(nodes=nodes)
+            return graphs
+
+    model = GraphWrapper(
+        Embedding(
+            irreps_out="1o + 1o + 1x0e",
+        )
+    )
+    rng = jax.random.PRNGKey(0)
+    params = model.init(rng, dummy_graph)
+    is_model_equivariant(
+        dummy_graph,
+        model,
+        params,
+        use_irreps=True,
+    )
+
+
 def test_equivariant_segnn(node_features):
     dummy_graph = create_dummy_graph(
         node_features=node_features,
@@ -175,7 +232,9 @@ def test_equivariant_segnn(node_features):
             num_message_passing_steps=3,
             d_hidden=32,
             task="node",
-            intermediate_hidden_irreps=False,
+            intermediate_hidden_irreps=True,
+            residual=True,
+            irreps_out="1o + 1o + 1x0e",
         )
     )
     rng = jax.random.PRNGKey(0)

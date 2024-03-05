@@ -17,6 +17,7 @@ from e3nn_jax.flax import Linear
 from models.mlp import MLP
 from models.utils.irreps_utils import balanced_irreps
 from models.utils.graph_utils import apply_pbc
+from models.utils.equivariant_graph_utils import SteerableGraphsTuple
 
 
 class TensorProductLinearGate(nn.Module):
@@ -24,9 +25,9 @@ class TensorProductLinearGate(nn.Module):
     bias: bool = True
     gradient_normalization: Optional[Union[str, float]] = "element"
     path_normalization: Optional[Union[str, float]] = "element"
-    gate_activation: bool = True
-    act_scalars: str = "gelu"
-    act_gates: str = "sigmoid"
+    activation: bool = True
+    scalar_activation: str = "silu"
+    gate_activation: str = "sigmoid"
 
     @nn.compact
     def __call__(self, x: IrrepsArray, y: IrrepsArray) -> IrrepsArray:
@@ -35,7 +36,7 @@ class TensorProductLinearGate(nn.Module):
             output_irreps = Irreps(output_irreps)
 
         # Predict extra scalars for gating \ell > 0 irreps
-        if self.gate_activation:
+        if self.activation: 
             gate_irreps = Irreps(
                 f"{output_irreps.num_irreps - output_irreps.count('0e')}x0e"
             )
@@ -51,85 +52,104 @@ class TensorProductLinearGate(nn.Module):
             path_normalization=self.path_normalization,
         )
         out = linear(tensor_product(x, y))
-
-        act_scalars = getattr(jax.nn, self.act_scalars)
-        act_gates = getattr(jax.nn, self.act_gates)
-
-        if self.gate_activation:
+        if self.activation:
+            scalar_activation = getattr(jax.nn, self.scalar_activation)
+            gate_activation = getattr(jax.nn, self.gate_activation)
+            # TODO: make sure even / odd resolved here
             out = e3nn.gate(
-                out, even_act=act_scalars, even_gate_act=act_gates
+                out,
+                scalar_activation,
+                odd_gate_act=gate_activation,
             )  # Default activations
-
         return out
 
 
 def get_edge_mlp_updates(
-    irreps_out: Irreps = None,
+    output_irreps: Irreps = None,
     n_layers: int = 2,
-    edge_attrs: Optional[Irreps] = None,
-    additional_message_features: Optional[jnp.array] = None,
-    act_scalars: str = "silu",
-    act_gates: str = "sigmoid",
+    steerable_edge_attrs: Optional[Irreps] = None,
+    additional_messages: Optional[jnp.array] = None,
+    scalar_activation: str = "silu",
+    gate_activation: str = "sigmoid",
 ):
     def update_fn(
         edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
     ) -> jnp.array:
         to_concat = [senders, receivers]
-        if additional_message_features is not None:
-            to_concat.append(additional_message_features)
+        if additional_messages is not None:
+            to_concat.append(additional_messages)
         m_ij = e3nn.concatenate(to_concat, axis=-1)  # Messages
-        a_ij = edge_attrs  # Attributes
         # Gated tensor product steered by geometric features attributes
-        for layer in range(n_layers - 1):
+        for _ in range(n_layers - 1):
             m_ij = TensorProductLinearGate(
-                irreps_out, act_scalars=act_scalars, act_gates=act_gates
-            )(m_ij, a_ij)
-        m_ij = TensorProductLinearGate(irreps_out, gate_activation=False)(
-            m_ij, a_ij
+                output_irreps,
+                scalar_activation=scalar_activation,
+                gate_activation=gate_activation,
+            )(m_ij, steerable_edge_attrs)
+        m_ij = TensorProductLinearGate(output_irreps, activation=False)(
+            m_ij, steerable_edge_attrs
         )  # No activation
-        # Return messages
         return m_ij
 
     return update_fn
 
 
 def get_node_mlp_updates(
-    irreps_out: Irreps = None,
+    output_irreps: Irreps = None,
     n_layers: int = 2,
     n_edges: int = 1,
     normalize_messages: bool = True,
-    node_attrs: Optional[Irreps] = None,
-    act_scalars: str = "silu",
-    act_gates: str = "sigmoid",
+    steerable_node_attrs: Optional[Irreps] = None,
+    scalar_activation: str = "silu",
+    gate_activation: str = "sigmoid",
 ):
     def update_fn(
         nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
     ) -> jnp.array:
         m_i = receivers
-        a_i = node_attrs
         if normalize_messages:
             m_i /= n_edges - 1
-            a_i /= n_edges - 1
+            # steerable_node_attrs /= n_edges - 1
 
         m_i = e3nn.concatenate([m_i, nodes], axis=-1)  # Eq. 8 of 2110.02905
         # Gated tensor product steered by geometric feature messages
         for _ in range(n_layers - 1):
-            nodes = TensorProductLinearGate(irreps_out, act_scalars=act_scalars, act_gates=act_gates,)(m_i, a_i)
-        nodes = TensorProductLinearGate(irreps_out, gate_activation=False)(
-            m_i, a_i 
+            nodes = TensorProductLinearGate(
+                output_irreps,
+                scalar_activation=scalar_activation,
+                gate_activation=gate_activation,
+            )(m_i, steerable_node_attrs)
+        nodes = TensorProductLinearGate(output_irreps, activation=False)(
+            m_i, steerable_node_attrs
         )  # No activation
         return nodes
 
     return update_fn
 
 
+def wrap_graph_tuple(graph):
+    """Remove additional attributes from the graph tuple."""
+    # Assuming 'steerable_node_attrs' is the extra attribute.
+    basic_graph = jraph.GraphsTuple(
+        nodes=graph.nodes,
+        edges=graph.edges,
+        receivers=graph.receivers,
+        senders=graph.senders,
+        globals=graph.globals,
+        n_node=graph.n_node,
+        n_edge=graph.n_edge,
+    )
+    equivariant_attrs = {
+        'steerable_node_attrs': graph.steerable_node_attrs,
+        'steerable_edge_attrs': graph.steerable_edge_attrs,
+        'additional_messages': graph.steerable_node_attrs,
+    }
+    return basic_graph, equivariant_attrs 
+
 class SEGNN(nn.Module):
     d_hidden: int = 64  # Hidden dimension
     l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
-    l_max_attr: int = (
-        1  # Maximum spherical harmonic degree for steerable geometric features
-    )
-    sphharm_norm: str = None #"component"  # Normalization for spherical harmonics; "component", "integral", "norm"
+    sphharm_norm: str = None  # "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
     irreps_out: Optional[
         Irreps
     ] = None  # Output irreps for node-wise task; defaults to input irreps
@@ -150,109 +170,71 @@ class SEGNN(nn.Module):
     unit_cell: Optional[
         jnp.array
     ] = None  # Unit cell for applying periodic boundary conditions; should be compatible with norm_dict
+    #TODO: This makes it much smaller, do we want it?
     intermediate_hidden_irreps: bool = False  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
-    act_scalars: str = "silu"  # Activation function for scalars
-    act_gates: str = "sigmoid"  # Activation function for gate scalars
+    scalar_activation: str = "silu"  # Activation function for scalars
+    gate_activation: str = "sigmoid"  # Activation function for gate scalars
+
+    def _embed(
+        self,
+        embed_irreps: e3nn.Irreps,
+        graph: jraph.GraphsTuple, 
+        steerable_node_attrs,
+    ):
+        nodes =  TensorProductLinearGate(embed_irreps, activation=False)(graph.nodes, steerable_node_attrs)
+        graph = graph._replace(nodes=nodes)
+        return graph 
+
+    def _decode(self, output_irreps: e3nn.Irreps, graph: jraph.GraphsTuple, steerable_node_attrs):
+        nodes =  TensorProductLinearGate(output_irreps, activation=False)(graph.nodes, steerable_node_attrs)
+        graph = graph._replace(nodes=nodes)
+        return graph
 
     @nn.compact
     def __call__(
         self,
-        graphs: jraph.GraphsTuple,
-        node_attrs: Optional[Irreps] = None,
-        edge_attrs: Optional[Irreps] = None,
+        st_graphs: SteerableGraphsTuple,
     ) -> jraph.GraphsTuple:
-        # Compute irreps
-        irreps_attr = Irreps.spherical_harmonics(
-            self.l_max_attr
-        )  # For steerable geometric features
         irreps_hidden = balanced_irreps(
             lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True
         )  # For hidden features
-        irreps_in = graphs.nodes.irreps  # Input irreps
+        irreps_in = st_graphs.nodes.irreps  # Input irreps
         irreps_out = (
             self.irreps_out if self.irreps_out is not None else irreps_in
         )  # Output irreps desired, if different from input irreps
-
-        # Distance vector; distance embedding is always used as edge attribute, and doesn't change between message-passing steps
-        x_i, x_j = (
-            graphs.nodes.slice_by_mul[:1][graphs.senders],
-            graphs.nodes.slice_by_mul[:1][graphs.receivers],
-        )  # Get position coordinates
-        r_ij = x_i - x_j  # Relative position vector
-
-        # Optionally apply PBC; unnormalize, PBC, then normalize back
-        if self.use_pbc:
-            r_ij = r_ij.array * self.norm_dict["std"][None, :3]
-            r_ij = apply_pbc(r_ij, self.unit_cell)
-            r_ij = IrrepsArray("1o", r_ij / self.norm_dict["std"][None, :3])
-        # include absolute distances as additional message features
-        d_ij = jnp.sqrt(
-            jnp.sum(r_ij.array**2, axis=-1, keepdims=True)
-        )  # Absolute distance
-        q_i, q_j = (
-            graphs.nodes.slice_by_mul[-1:][graphs.senders],
-            graphs.nodes.slice_by_mul[-1:][graphs.receivers],
-        )
-        q_ij = q_i.array * q_j.array
-        additional_message_features = IrrepsArray(
-            "2x0e",
-            jnp.concatenate([d_ij, q_ij], axis=-1),
-        )
-        # Project relative distance vectors onto spherical harmonic basis and include as edge attribute
-        a_r_ij = e3nn.spherical_harmonics(
-            irreps_out=irreps_attr,
-            input=r_ij,
-            normalize=True,
-            normalization=self.sphharm_norm,
-        )
-        edge_attrs = a_r_ij
-
-        # Aggregate distance embedding over neighbours to use as node attribute
-        node_attrs = e3nn.scatter_mean(
-            a_r_ij, dst=graphs.receivers, output_size=graphs.nodes.shape[0]
-        )
-
-        # Optionally use velocity as steerable node attribute
-        if self.use_vel_attrs:
-            v_i = graphs.nodes.slice_by_mul[1:2]
-            a_v_i = e3nn.spherical_harmonics(
-                irreps_out=irreps_attr,
-                input=v_i,
-                normalize=True,
-                normalization=self.sphharm_norm,
-            )
-            node_attrs += a_v_i #e3nn.concatenate([node_attrs, a_v_i], axis=-1)
-
+        additional_messages = st_graphs.additional_messages
+        steerable_node_attrs = st_graphs.steerable_node_attrs
+        steerable_edge_attrs = st_graphs.steerable_edge_attrs
+        graphs, _ = wrap_graph_tuple(st_graphs)
+        # Compute irreps
         # If specified, use hidden irreps between message passing steps; otherwise, use input irreps (bottleneck and fewer parameters)
         irreps_intermediate = (
             irreps_hidden if self.intermediate_hidden_irreps else irreps_in
         )
-
         # Neighborhood aggregation function
         aggregate_edges_for_nodes_fn = getattr(
             utils, f"segment_{self.message_passing_agg}"
         )
-
+        graphs = self._embed(irreps_intermediate,graphs,steerable_node_attrs )
         # Message passing rounds
-        for step in range(self.num_message_passing_steps):
+        for _ in range(self.num_message_passing_steps):
             update_edge_fn = get_edge_mlp_updates(
-                irreps_out=irreps_hidden,
+                output_irreps=irreps_hidden,
                 n_layers=self.num_blocks,
-                edge_attrs=edge_attrs,
-                additional_message_features=additional_message_features,
-                act_scalars=self.act_scalars,
-                act_gates=self.act_gates,
+                steerable_edge_attrs=steerable_edge_attrs,
+                additional_messages=additional_messages,
+                scalar_activation=self.scalar_activation,
+                gate_activation=self.gate_activation,
             )
             update_node_fn = get_node_mlp_updates(
-                irreps_out=irreps_intermediate,  # Node update outputs to `irreps_intermediate`
+                output_irreps=irreps_intermediate,  # Node update outputs to `irreps_intermediate`
                 n_layers=self.num_blocks,
                 normalize_messages=self.normalize_messages,
                 n_edges=graphs.n_edge,
-                node_attrs=node_attrs,
-                act_scalars=self.act_scalars,
-                act_gates=self.act_gates,
+                steerable_node_attrs=steerable_node_attrs,
+                scalar_activation=self.scalar_activation,
+                gate_activation=self.gate_activation,
             )
-
             # Apply steerable EGCL
             graph_net = jraph.GraphNetwork(
                 update_node_fn=update_node_fn,
@@ -260,12 +242,10 @@ class SEGNN(nn.Module):
                 aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn,
             )
             processed_graphs = graph_net(graphs)
-
             # Skip connection
             if self.residual:
                 graphs = processed_graphs._replace(
-                    nodes=processed_graphs.nodes
-                    + Linear(irreps_intermediate)(graphs.nodes)
+                    nodes=processed_graphs.nodes + graphs.nodes
                 )
             else:
                 graphs = processed_graphs
@@ -273,9 +253,11 @@ class SEGNN(nn.Module):
         if self.task == "node":
             # If output irreps differ from input irreps, project to output irreps
             if irreps_out != irreps_in:
-                graphs = graphs._replace(nodes=Linear(irreps_out)(graphs.nodes))
+                graphs = self._decode(irreps_out, graphs, steerable_node_attrs=steerable_node_attrs)
             return graphs
         elif self.task == "graph":
+            # TODO: check if eq graph aggregation sensible and flexible
+
             # Aggregate residual node features
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(
