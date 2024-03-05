@@ -16,7 +16,6 @@ from e3nn_jax.flax import Linear
 
 from models.mlp import MLP
 from models.utils.irreps_utils import balanced_irreps
-from models.utils.graph_utils import apply_pbc
 from models.utils.equivariant_graph_utils import SteerableGraphsTuple
 
 
