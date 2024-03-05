@@ -1,9 +1,11 @@
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union, List, Callable
 import dataclasses
 
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+
+import jax.tree_util as tree
 
 import jraph
 from jraph._src import utils
@@ -29,10 +31,12 @@ class TensorProductLinearGate(nn.Module):
     gate_activation: str = "sigmoid"
 
     @nn.compact
-    def __call__(self, x: IrrepsArray, y: IrrepsArray) -> IrrepsArray:
+    def __call__(self, x: IrrepsArray, y: IrrepsArray=None) -> IrrepsArray:
         output_irreps = self.output_irreps
         if not isinstance(output_irreps, Irreps):
             output_irreps = Irreps(output_irreps)
+        if not y:
+            y = IrrepsArray("1x0e", jnp.ones((1, 1), dtype=x.dtype))
 
         # Predict extra scalars for gating \ell > 0 irreps
         if self.activation: 
@@ -162,7 +166,7 @@ class SEGNN(nn.Module):
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
-    n_outputs: int = 1  # Number of outputs for graph-level readout
+    n_decoding_blocks: int = 3
     norm_dict: dict = dataclasses.field(
         default_factory=lambda: {"mean": 0.0, "std": 1.0}
     )  # Normalization dictionary for relative position vectors
@@ -184,10 +188,42 @@ class SEGNN(nn.Module):
         graph = graph._replace(nodes=nodes)
         return graph 
 
-    def _decode(self, output_irreps: e3nn.Irreps, graph: jraph.GraphsTuple, steerable_node_attrs):
-        nodes =  TensorProductLinearGate(output_irreps, activation=False)(graph.nodes, steerable_node_attrs)
+    def _decode(self, output_irreps: e3nn.Irreps, n_blocks: int, graph: jraph.GraphsTuple, steerable_node_attrs):
+        nodes = graph.nodes
+        for i in range(n_blocks):
+            nodes = TensorProductLinearGate(output_irreps, activation=True, scalar_activation=self.scalar_activation, gate_activation=self.gate_activation)(nodes,)
+        nodes =  TensorProductLinearGate(output_irreps, activation=False)(nodes, steerable_node_attrs)
         graph = graph._replace(nodes=nodes)
         return graph
+
+    def pooling(
+        self,
+        graph: jraph.GraphsTuple,
+        aggregate_fn: Callable = jraph.segment_sum,
+    ) -> e3nn.IrrepsArray:
+        """Pools over graph nodes with the specified aggregation.
+
+        Args:
+            graph: Input graph
+            aggregate_fn: function used to update pool over the nodes
+
+        Returns:
+            The pooled graph nodes.
+        """
+        return e3nn.IrrepsArray(
+            graph.nodes.irreps, aggregate_fn(graph.nodes.array, axis=0)
+        )
+
+    def _decode_graph(self, output_irreps: e3nn.Irreps, pooled_irreps: e3nn.Irreps, n_blocks: int, graph: jraph.GraphsTuple, steerable_node_attrs):
+        nodes =  TensorProductLinearGate(pooled_irreps, activation=False)(graph.nodes, steerable_node_attrs)
+        pool_fn = getattr(jnp, f"{self.readout_agg}")
+        nodes = self.pooling(graph._replace(nodes=nodes), aggregate_fn=pool_fn) 
+        # post pool mlp (not steerable)
+        for i in range(n_blocks):
+            nodes = TensorProductLinearGate(output_irreps, activation=True, scalar_activation=self.scalar_activation, gate_activation=self.gate_activation)(nodes,)
+        nodes = TensorProductLinearGate(output_irreps, activation=False,)(nodes)
+        return nodes
+
 
     @nn.compact
     def __call__(
@@ -252,32 +288,21 @@ class SEGNN(nn.Module):
         if self.task == "node":
             # If output irreps differ from input irreps, project to output irreps
             if irreps_out != irreps_in:
-                graphs = self._decode(irreps_out, graphs, steerable_node_attrs=steerable_node_attrs)
+                graphs = self._decode(output_irreps=irreps_out, graph=graphs, n_blocks=self.n_decoding_blocks,steerable_node_attrs=steerable_node_attrs)
             return graphs
         elif self.task == "graph":
             # TODO: check if eq graph aggregation sensible and flexible
-
             # Aggregate residual node features
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(
                     f"Invalid global aggregation function {self.message_passing_agg}"
                 )
-
-            # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
-            irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
-            readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-            nodes_pre_pool = nn.Dense(self.d_hidden)(
-                TensorProductLinearGate(irreps_pre_pool, gate_activation=False)(
-                    graphs.nodes, node_attrs
-                ).array
+            return self._decode_graph(
+                output_irreps=irreps_out,
+                pooled_irreps=irreps_hidden,
+                n_blocks=self.n_decoding_blocks,
+                graph=graphs,
+                steerable_node_attrs=steerable_node_attrs,
             )
-            agg_nodes = readout_agg_fn(nodes_pre_pool, axis=0)
-
-            # Readout and return
-            out = MLP(
-                [w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs]
-            )(agg_nodes)
-            return out
-
         else:
             raise ValueError(f"Invalid task {self.task}")

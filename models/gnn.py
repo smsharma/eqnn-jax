@@ -184,7 +184,7 @@ class GNN(nn.Module):
                     self.n_outputs,
                 ]
             )(agg_nodes)
-            return out, None
+            return out
 
         else:
             raise ValueError(f"Invalid task {self.task}")

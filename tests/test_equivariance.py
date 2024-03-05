@@ -70,11 +70,10 @@ def create_dummy_graph(
             receivers=targets,
         )
 
-
 @pytest.fixture
 def node_features():
-    return jnp.array(np.random.randn(2, 5, 7))
-
+    key = jax.random.PRNGKey(0)
+    return jax.random.normal(key, (2, 5, 7))
 
 def apply_transformation(
     x, angle_deg=45.0, axis=np.array([0, 1 / np.sqrt(2), 1 / np.sqrt(2)])
@@ -128,6 +127,24 @@ def is_model_equivariant(
         )
 
 
+def is_model_invariant(
+    data, model, params, should_be_invariant=True, use_irreps=False, rtol=0.05
+):
+    transformed_data = transform_graph(
+        data.nodes if not use_irreps else data.nodes.array,
+        use_irreps=use_irreps,
+    )
+    output_original = model.apply(params, data)
+    output_transformed = model.apply(params, transformed_data)
+    if use_irreps:
+        output_original = output_original.array
+        output_transformed = output_transformed.array
+    # Make sure output original sufficiently different from output transformed
+    if should_be_invariant:
+        assert np.allclose(output_original, output_transformed, rtol=rtol)
+    else:
+        assert not np.allclose(output_original, output_transformed, rtol=rtol)
+
 def test_not_equivariant_gnn(
     node_features,
 ):
@@ -155,6 +172,32 @@ def test_not_equivariant_gnn(
         use_irreps=False,
     )
 
+def test_not_invariant_gnn(
+    node_features,
+):
+    dummy_graph = create_dummy_graph(
+        node_features=node_features,
+        k=5,
+        use_irreps=False,
+    )
+    model = GraphWrapper(
+        GNN(
+            message_passing_steps=3,
+            d_hidden=32,
+            n_layers=3,
+            activation="gelu",
+            task="graph",
+        )
+    )
+    rng = jax.random.PRNGKey(0)
+    params = model.init(rng, dummy_graph)
+    is_model_invariant(
+        dummy_graph,
+        model,
+        params,
+        should_be_invariant=False,
+        use_irreps=False,
+    )
 
 def test_equivariant_egnn(node_features):
     dummy_graph = create_dummy_graph(
@@ -191,7 +234,6 @@ def test_equivariant_embedding_for_segnn(node_features):
         k=5,
         use_irreps=True,
     )
-
     class Embedding(nn.Module):
         irreps_out: Irreps("1o")
 
@@ -229,7 +271,7 @@ def test_equivariant_segnn(node_features):
     )
     model = GraphWrapper(
         SEGNN(
-            num_message_passing_steps=3,
+            num_message_passing_steps=2,
             d_hidden=32,
             task="node",
             intermediate_hidden_irreps=True,
@@ -240,6 +282,32 @@ def test_equivariant_segnn(node_features):
     rng = jax.random.PRNGKey(0)
     params = model.init(rng, dummy_graph)
     is_model_equivariant(
+        dummy_graph,
+        model,
+        params,
+        use_irreps=True,
+    )
+
+
+def test_invariant_segnn(node_features):
+    dummy_graph = create_dummy_graph(
+        node_features=node_features,
+        k=5,
+        use_irreps=True,
+    )
+    model = GraphWrapper(
+        SEGNN(
+            num_message_passing_steps=3,
+            d_hidden=32,
+            task="graph",
+            intermediate_hidden_irreps=True,
+            residual=True,
+            irreps_out="1x0e",
+        )
+    )
+    rng = jax.random.PRNGKey(0)
+    params = model.init(rng, dummy_graph)
+    is_model_invariant(
         dummy_graph,
         model,
         params,
