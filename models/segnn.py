@@ -31,7 +31,7 @@ class TensorProductLinearGate(nn.Module):
     gate_activation: str = "sigmoid"
 
     @nn.compact
-    def __call__(self, x: IrrepsArray, y: IrrepsArray=None) -> IrrepsArray:
+    def __call__(self, x: IrrepsArray, y: IrrepsArray = None) -> IrrepsArray:
         output_irreps = self.output_irreps
         if not isinstance(output_irreps, Irreps):
             output_irreps = Irreps(output_irreps)
@@ -39,7 +39,7 @@ class TensorProductLinearGate(nn.Module):
             y = IrrepsArray("1x0e", jnp.ones((1, 1), dtype=x.dtype))
 
         # Predict extra scalars for gating \ell > 0 irreps
-        if self.activation: 
+        if self.activation:
             gate_irreps = Irreps(
                 f"{output_irreps.num_irreps - output_irreps.count('0e')}x0e"
             )
@@ -143,56 +143,57 @@ def wrap_graph_tuple(graph):
         n_edge=graph.n_edge,
     )
     equivariant_attrs = {
-        'steerable_node_attrs': graph.steerable_node_attrs,
-        'steerable_edge_attrs': graph.steerable_edge_attrs,
-        'additional_messages': graph.steerable_node_attrs,
+        "steerable_node_attrs": graph.steerable_node_attrs,
+        "steerable_edge_attrs": graph.steerable_edge_attrs,
+        "additional_messages": graph.steerable_node_attrs,
     }
-    return basic_graph, equivariant_attrs 
+    return basic_graph, equivariant_attrs
+
 
 class SEGNN(nn.Module):
     d_hidden: int = 64  # Hidden dimension
     l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
-    sphharm_norm: str = None  # "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
-    irreps_out: Optional[
+    output_irreps: Optional[
         Irreps
     ] = None  # Output irreps for node-wise task; defaults to input irreps
-    use_vel_attrs: bool = False  # Use velocity as steerable attribute
     normalize_messages: bool = True  # Normalize messages by number of edges
     num_message_passing_steps: int = 3  # Number of message passing steps
     num_blocks: int = 3  # Number of gated tensor products in each message passing step
     residual: bool = True  # Residual connections
-    use_pbc: bool = False  # Use periodic boundary conditions when computing relative position vectors
     message_passing_agg: str = "sum"  # "sum", "mean", "max"
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
-    n_decoding_blocks: int = 3
-    norm_dict: dict = dataclasses.field(
-        default_factory=lambda: {"mean": 0.0, "std": 1.0}
-    )  # Normalization dictionary for relative position vectors
-    unit_cell: Optional[
-        jnp.array
-    ] = None  # Unit cell for applying periodic boundary conditions; should be compatible with norm_dict
-    #TODO: This makes it much smaller, do we want it?
-    intermediate_hidden_irreps: bool = False  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
+    intermediate_hidden_irreps: bool = True  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
     scalar_activation: str = "silu"  # Activation function for scalars
     gate_activation: str = "sigmoid"  # Activation function for gate scalars
 
     def _embed(
         self,
         embed_irreps: e3nn.Irreps,
-        graph: jraph.GraphsTuple, 
+        graph: jraph.GraphsTuple,
         steerable_node_attrs,
     ):
-        nodes =  TensorProductLinearGate(embed_irreps, activation=False)(graph.nodes, steerable_node_attrs)
+        nodes = TensorProductLinearGate(embed_irreps, activation=False)(
+            graph.nodes, steerable_node_attrs
+        )
         graph = graph._replace(nodes=nodes)
-        return graph 
+        return graph
 
-    def _decode(self, output_irreps: e3nn.Irreps, n_blocks: int, graph: jraph.GraphsTuple, steerable_node_attrs):
+    def _decode(self, graph: jraph.GraphsTuple, steerable_node_attrs):
         nodes = graph.nodes
-        for i in range(n_blocks):
-            nodes = TensorProductLinearGate(output_irreps, activation=True, scalar_activation=self.scalar_activation, gate_activation=self.gate_activation)(nodes,)
-        nodes =  TensorProductLinearGate(output_irreps, activation=False)(nodes, steerable_node_attrs)
+        for i in range(self.num_blocks):
+            nodes = TensorProductLinearGate(
+                self.output_irreps,
+                activation=True,
+                scalar_activation=self.scalar_activation,
+                gate_activation=self.gate_activation,
+            )(
+                nodes,
+            )
+        nodes = TensorProductLinearGate(self.output_irreps, activation=False)(
+            nodes, steerable_node_attrs
+        )
         graph = graph._replace(nodes=nodes)
         return graph
 
@@ -214,28 +215,41 @@ class SEGNN(nn.Module):
             graph.nodes.irreps, aggregate_fn(graph.nodes.array, axis=0)
         )
 
-    def _decode_graph(self, output_irreps: e3nn.Irreps, pooled_irreps: e3nn.Irreps, n_blocks: int, graph: jraph.GraphsTuple, steerable_node_attrs):
-        nodes =  TensorProductLinearGate(pooled_irreps, activation=False)(graph.nodes, steerable_node_attrs)
+    def _decode_graph(
+        self, hidden_irreps: e3nn.Irreps, graph: jraph.GraphsTuple, steerable_node_attrs
+    ):
+        nodes = TensorProductLinearGate(hidden_irreps, activation=False)(
+            graph.nodes, steerable_node_attrs
+        )
         pool_fn = getattr(jnp, f"{self.readout_agg}")
-        nodes = self.pooling(graph._replace(nodes=nodes), aggregate_fn=pool_fn) 
+        nodes = self.pooling(graph._replace(nodes=nodes), aggregate_fn=pool_fn)
         # post pool mlp (not steerable)
-        for i in range(n_blocks):
-            nodes = TensorProductLinearGate(output_irreps, activation=True, scalar_activation=self.scalar_activation, gate_activation=self.gate_activation)(nodes,)
-        nodes = TensorProductLinearGate(output_irreps, activation=False,)(nodes)
+        for i in range(self.num_blocks):
+            nodes = TensorProductLinearGate(
+                self.output_irreps,
+                activation=True,
+                scalar_activation=self.scalar_activation,
+                gate_activation=self.gate_activation,
+            )(
+                nodes,
+            )
+        nodes = TensorProductLinearGate(
+            self.output_irreps,
+            activation=False,
+        )(nodes)
         return nodes
-
 
     @nn.compact
     def __call__(
         self,
         st_graphs: SteerableGraphsTuple,
     ) -> jraph.GraphsTuple:
-        irreps_hidden = balanced_irreps(
+        hidden_irreps = balanced_irreps(
             lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True
         )  # For hidden features
         irreps_in = st_graphs.nodes.irreps  # Input irreps
-        irreps_out = (
-            self.irreps_out if self.irreps_out is not None else irreps_in
+        output_irreps = (
+            self.output_irreps if self.output_irreps is not None else irreps_in
         )  # Output irreps desired, if different from input irreps
         additional_messages = st_graphs.additional_messages
         steerable_node_attrs = st_graphs.steerable_node_attrs
@@ -244,17 +258,17 @@ class SEGNN(nn.Module):
         # Compute irreps
         # If specified, use hidden irreps between message passing steps; otherwise, use input irreps (bottleneck and fewer parameters)
         irreps_intermediate = (
-            irreps_hidden if self.intermediate_hidden_irreps else irreps_in
+            hidden_irreps if self.intermediate_hidden_irreps else irreps_in
         )
         # Neighborhood aggregation function
         aggregate_edges_for_nodes_fn = getattr(
             utils, f"segment_{self.message_passing_agg}"
         )
-        graphs = self._embed(irreps_intermediate,graphs,steerable_node_attrs )
+        graphs = self._embed(irreps_intermediate, graphs, steerable_node_attrs)
         # Message passing rounds
         for _ in range(self.num_message_passing_steps):
             update_edge_fn = get_edge_mlp_updates(
-                output_irreps=irreps_hidden,
+                output_irreps=hidden_irreps,
                 n_layers=self.num_blocks,
                 steerable_edge_attrs=steerable_edge_attrs,
                 additional_messages=additional_messages,
@@ -287,20 +301,19 @@ class SEGNN(nn.Module):
 
         if self.task == "node":
             # If output irreps differ from input irreps, project to output irreps
-            if irreps_out != irreps_in:
-                graphs = self._decode(output_irreps=irreps_out, graph=graphs, n_blocks=self.n_decoding_blocks,steerable_node_attrs=steerable_node_attrs)
+            if output_irreps != irreps_in:
+                graphs = self._decode(
+                    graph=graphs, steerable_node_attrs=steerable_node_attrs
+                )
             return graphs
         elif self.task == "graph":
-            # TODO: check if eq graph aggregation sensible and flexible
             # Aggregate residual node features
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(
                     f"Invalid global aggregation function {self.message_passing_agg}"
                 )
             return self._decode_graph(
-                output_irreps=irreps_out,
-                pooled_irreps=irreps_hidden,
-                n_blocks=self.n_decoding_blocks,
+                hidden_irreps=hidden_irreps,
                 graph=graphs,
                 steerable_node_attrs=steerable_node_attrs,
             )

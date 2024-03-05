@@ -276,7 +276,7 @@ def test_equivariant_segnn(node_features):
             task="node",
             intermediate_hidden_irreps=True,
             residual=True,
-            irreps_out="1o + 1o + 1x0e",
+            output_irreps="1o + 1o + 1x0e",
         )
     )
     rng = jax.random.PRNGKey(0)
@@ -302,7 +302,7 @@ def test_invariant_segnn(node_features):
             task="graph",
             intermediate_hidden_irreps=True,
             residual=True,
-            irreps_out="1x0e",
+            output_irreps="1x0e",
         )
     )
     rng = jax.random.PRNGKey(0)
