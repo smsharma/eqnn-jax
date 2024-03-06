@@ -27,6 +27,7 @@ def balanced_irreps(lmax: int, feature_size: int, use_sh: bool = True) -> Irreps
 
     return Irreps("+".join(irreps))
 
+
 def weight_balanced_irreps(
     scalar_units: int, irreps_right: Irreps, lmax: int = None
 ) -> Irreps:
@@ -49,9 +50,7 @@ def weight_balanced_irreps(
     n = 0
     while True:
         n += 1
-        irreps_left = (
-            (Irreps.spherical_harmonics(lmax) * n).sort().irreps.simplify()
-        )
+        irreps_left = (Irreps.spherical_harmonics(lmax) * n).sort().irreps.simplify()
         # number of paths
         tp_weights = sum(
             prod([irreps_left[i_1].mul ** 2, irreps_right[i_2].mul])

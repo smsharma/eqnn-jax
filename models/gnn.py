@@ -170,9 +170,12 @@ class GNN(nn.Module):
 
         if self.task == "node":
             if self.d_output is not None:
-                nodes = MLP([self.d_hidden] * (self.n_layers-1) + [self.d_output], activation=activation)(processed_graphs.nodes)
+                nodes = MLP(
+                    [self.d_hidden] * (self.n_layers - 1) + [self.d_output],
+                    activation=activation,
+                )(processed_graphs.nodes)
                 processed_graphs = processed_graphs._replace(
-                    nodes=nodes, 
+                    nodes=nodes,
                 )
             return processed_graphs
 

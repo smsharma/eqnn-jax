@@ -4,11 +4,11 @@ import e3nn_jax as e3nn
 from e3nn_jax import IrrepsArray
 
 import jax
-from jraph import segment_mean 
+from jraph import segment_mean
 import jax.numpy as jnp
 from .graph_utils import apply_pbc
 
-ArrayTree = Union[jnp.ndarray, Iterable['ArrayTree'], Mapping[Any, 'ArrayTree']]
+ArrayTree = Union[jnp.ndarray, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
 
 class SteerableGraphsTuple(NamedTuple):
@@ -16,12 +16,13 @@ class SteerableGraphsTuple(NamedTuple):
     edges: Optional[ArrayTree]
     receivers: Optional[jnp.ndarray]  # with integer dtype
     senders: Optional[jnp.ndarray]  # with integer dtype
-    additional_messages: Optional[jnp.ndarray]  
-    steerable_node_attrs: Optional[jnp.ndarray]  
-    steerable_edge_attrs: Optional[jnp.ndarray]  
+    additional_messages: Optional[jnp.ndarray]
+    steerable_node_attrs: Optional[jnp.ndarray]
+    steerable_edge_attrs: Optional[jnp.ndarray]
     globals: Optional[ArrayTree]
     n_node: jnp.ndarray  # with integer dtype
-    n_edge: jnp.ndarray   # with integer dtype
+    n_edge: jnp.ndarray  # with integer dtype
+
 
 def get_equivariant_graph(
     node_features,
@@ -55,15 +56,19 @@ def get_equivariant_graph(
         normalize=True,
         normalization=spherical_harmonics_norm,
     )
-    #TODO: clean this up (should the entire function be part of vmap?)
+
+    # TODO: clean this up (should the entire function be part of vmap?)
     def scatter_mean_wrapper(steerable_edge_attrs, receivers, output_size):
-        return e3nn.scatter_mean(steerable_edge_attrs, dst=receivers, output_size=output_size)
-    # TODO: Why not learn this?
-    steerable_node_attrs = jax.vmap(scatter_mean_wrapper, in_axes=(0,0,None))(
-            steerable_edge_attrs,
-            receivers,
-            positions.shape[1],
+        return e3nn.scatter_mean(
+            steerable_edge_attrs, dst=receivers, output_size=output_size
         )
+
+    # TODO: Why not learn this?
+    steerable_node_attrs = jax.vmap(scatter_mean_wrapper, in_axes=(0, 0, None))(
+        steerable_edge_attrs,
+        receivers,
+        positions.shape[1],
+    )
     if steerable_velocities:
         vel_sph = e3nn.spherical_harmonics(
             attribute_irreps,
@@ -77,10 +82,10 @@ def get_equivariant_graph(
         edges=edges,
         receivers=receivers,
         senders=senders,
-        additional_messages = additional_messages,
+        additional_messages=additional_messages,
         steerable_edge_attrs=steerable_edge_attrs,
         steerable_node_attrs=steerable_node_attrs,
         globals=globals,
         n_node=n_node,
         n_edge=n_edge,
-    ) 
+    )

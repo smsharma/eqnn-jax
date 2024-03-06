@@ -129,5 +129,3 @@ def fourier_features(x, num_encodings=8, include_self=True):
     x = np.concatenate([np.sin(x), np.cos(x)], axis=-1)
     x = np.concatenate((x, orig_x), axis=-1) if include_self else x
     return x
-
-

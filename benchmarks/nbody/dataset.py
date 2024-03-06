@@ -155,6 +155,7 @@ class ChargedDataset(BaseDataset):
         )
         return loc, vel, edge_attr, charges, target_loc
 
+
 def NbodyGraphTransform(
     dataset_name: str,
     n_nodes: int,
@@ -167,7 +168,7 @@ def NbodyGraphTransform(
 
     if dataset_name == "charged":
         # charged system is a connected graph
-        edges = [(i, j) for i in range(n_nodes) for j in range(n_nodes) if i!=j] 
+        edges = [(i, j) for i in range(n_nodes) for j in range(n_nodes) if i != j]
         full_edge_indices = jnp.array([edges for _ in range(batch_size)])
 
     def _to_steerable_graph(
@@ -178,26 +179,28 @@ def NbodyGraphTransform(
         # substract center of the system:
         targets = targets - loc
         loc = loc - loc.mean(axis=1, keepdims=True)
-        senders, receivers = full_edge_indices[:,:,0], full_edge_indices[:,:, 1]
+        senders, receivers = full_edge_indices[:, :, 0], full_edge_indices[:, :, 1]
         vel_modulus = jnp.linalg.norm(vel, axis=-1, keepdims=True)
         x_i = loc[jnp.arange(loc.shape[0])[:, None], senders, :]
         x_j = loc[jnp.arange(loc.shape[0])[:, None], receivers, :]
         q_i = q[jnp.arange(q.shape[0])[:, None], senders, :]
         q_j = q[jnp.arange(q.shape[0])[:, None], receivers, :]
-        d_ij = jnp.sqrt(jnp.sum((x_i-x_j)**2, axis=-1, keepdims=True))
+        d_ij = jnp.sqrt(jnp.sum((x_i - x_j) ** 2, axis=-1, keepdims=True))
         q_ij = q_i * q_j
         additional_messages = e3nn.IrrepsArray(
             "2x0e",
             jnp.concatenate([d_ij, q_ij], axis=-1),
         )
         st_graph = get_equivariant_graph(
-            node_features=e3nn.IrrepsArray("1o + 1o + 2x0e",jnp.concatenate([loc, vel, vel_modulus, q], axis=-1)),
+            node_features=e3nn.IrrepsArray(
+                "1o + 1o + 2x0e", jnp.concatenate([loc, vel, vel_modulus, q], axis=-1)
+            ),
             positions=loc,
             velocities=vel,
             senders=senders,
             receivers=receivers,
             n_node=jnp.array([n_nodes] * len(loc)),
-            n_edge=jnp.array([senders.shape[-1]]*len(loc)),
+            n_edge=jnp.array([senders.shape[-1]] * len(loc)),
             globals=None,
             edges=None,
             lmax_attributes=lmax_attributes,
@@ -207,6 +210,7 @@ def NbodyGraphTransform(
         return st_graph, targets
 
     return _to_steerable_graph
+
 
 def NonSteerableNbodyGraphTransform(
     dataset_name: str,
@@ -220,7 +224,7 @@ def NonSteerableNbodyGraphTransform(
 
     if dataset_name == "charged":
         # charged system is a connected graph
-        edges = [(i, j) for i in range(n_nodes) for j in range(n_nodes) if i!=j] 
+        edges = [(i, j) for i in range(n_nodes) for j in range(n_nodes) if i != j]
         full_edge_indices = jnp.array([edges for _ in range(batch_size)])
 
     def _to_graph(
@@ -231,13 +235,13 @@ def NonSteerableNbodyGraphTransform(
         # substract center of the system:
         targets = targets - loc
         loc = loc - loc.mean(axis=1, keepdims=True)
-        senders, receivers = full_edge_indices[:,:,0], full_edge_indices[:,:, 1]
+        senders, receivers = full_edge_indices[:, :, 0], full_edge_indices[:, :, 1]
         vel_modulus = jnp.linalg.norm(vel, axis=-1, keepdims=True)
         x_i = loc[jnp.arange(loc.shape[0])[:, None], senders, :]
         x_j = loc[jnp.arange(loc.shape[0])[:, None], receivers, :]
         q_i = q[jnp.arange(q.shape[0])[:, None], senders, :]
         q_j = q[jnp.arange(q.shape[0])[:, None], receivers, :]
-        d_ij = jnp.sqrt(jnp.sum((x_i-x_j)**2, axis=-1, keepdims=True))
+        d_ij = jnp.sqrt(jnp.sum((x_i - x_j) ** 2, axis=-1, keepdims=True))
         q_ij = q_i * q_j
         graph = jraph.GraphsTuple(
             nodes=jnp.concatenate([loc, vel, vel_modulus, q], axis=-1),
@@ -246,10 +250,12 @@ def NonSteerableNbodyGraphTransform(
             senders=senders,
             globals=None,
             n_node=jnp.array([n_nodes] * len(loc)),
-            n_edge=jnp.array([senders.shape[-1]]*len(loc)),
+            n_edge=jnp.array([senders.shape[-1]] * len(loc)),
         )
         return graph, targets
-    return _to_graph 
+
+    return _to_graph
+
 
 def numpy_collate(batch):
     if isinstance(batch[0], np.ndarray):

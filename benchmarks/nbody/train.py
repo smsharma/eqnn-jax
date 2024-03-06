@@ -22,7 +22,7 @@ from models.gnn import GNN
 from models.utils.irreps_utils import weight_balanced_irreps
 
 
-@partial(jit, static_argnames=["model_fn", "criterion",  "eval_trn", "steerable"])
+@partial(jit, static_argnames=["model_fn", "criterion", "eval_trn", "steerable"])
 def loss_fn_wrapper(
     params: hk.Params,
     st_graph: SteerableGraphsTuple,
@@ -36,7 +36,7 @@ def loss_fn_wrapper(
     else:
         pred = model_fn(params, st_graph).nodes
     assert target.shape == pred.shape
-    return jnp.mean(criterion(pred, target)) 
+    return jnp.mean(criterion(pred, target))
 
 
 @partial(jit, static_argnames=["loss_fn", "opt_update"])
@@ -85,7 +85,10 @@ def train(
 ):
     init_data = next(iter(loader_train))
     init_graph, _ = graph_transform(init_data)
-    params = segnn.init(key, init_graph,)
+    params = segnn.init(
+        key,
+        init_graph,
+    )
     print(
         f"Starting {n_steps} steps"
         f"with {hk.data_structures.tree_size(params)} parameters.\n"
@@ -133,37 +136,47 @@ def train(
                 end="",
             )
             print()
-            val_loss = eval_fn(loader_val, params=params, )
+            val_loss = eval_fn(
+                loader_val,
+                params=params,
+            )
             if val_loss < best_val:
                 best_val = val_loss
                 tag = " (best)"
-                test_loss_ckp = eval_fn(loader_test, params=params,) 
+                test_loss_ckp = eval_fn(
+                    loader_test,
+                    params=params,
+                )
             else:
                 tag = ""
 
             print(f" - val loss {val_loss:.6f}{tag}", end="")
             print()
 
-    test_loss = eval_fn(loader_test, params=params, )
+    test_loss = eval_fn(
+        loader_test,
+        params=params,
+    )
     # ignore compilation time
     print(
         "Training done.\n"
         f"Final test loss {test_loss:.6f} - checkpoint test loss {test_loss_ckp:.6f}.\n"
     )
 
+
 class GraphWrapper(nn.Module):
     model_name: str
     param_dict: Dict
-    
+
     @nn.compact
     def __call__(self, x):
-        if self.model_name == 'SEGNN':
+        if self.model_name == "SEGNN":
             return jax.vmap(SEGNN(**self.param_dict))(x)
-        elif self.model_name == 'GNN':
+        elif self.model_name == "GNN":
             return jax.vmap(GNN(**self.param_dict))(x)
 
         else:
-            raise ValueError('Please specify a valid model name.')
+            raise ValueError("Please specify a valid model name.")
 
 
 if __name__ == "__main__":
@@ -173,45 +186,45 @@ if __name__ == "__main__":
     hidden_units = 64
     lmax_attributes = 1
     lmax_hidden = 1
-    batch_size = 100 
+    batch_size = 100
     node_irreps = e3nn.Irreps("2x1o + 1x0e")
     output_irreps = e3nn.Irreps("1x1o")
     additional_message_irreps = e3nn.Irreps("2x0e")
     attr_irreps = e3nn.Irreps.spherical_harmonics(lmax_attributes)
-    #hidden_irreps = balanced_irreps(lmax=lmax_hidden, feature_size=hidden_units, use_sh=True)
-    #TODO: Why so many scalars?
+    # hidden_irreps = balanced_irreps(lmax=lmax_hidden, feature_size=hidden_units, use_sh=True)
+    # TODO: Why so many scalars?
     hidden_irreps = weight_balanced_irreps(
-        lmax=lmax_hidden, 
-        scalar_units = hidden_units,
+        lmax=lmax_hidden,
+        scalar_units=hidden_units,
         irreps_right=attr_irreps,
     )
     if steerable:
         hparams = {
-            'd_hidden': hidden_units,
-            'l_max_hidden': lmax_hidden,
-            'num_blocks': 2,
-            'num_message_passing_steps': 7,
-            'intermediate_hidden_irreps': True, 
-            'task': 'node',
-            'output_irreps': output_irreps,
-            'hidden_irreps': hidden_irreps,
-            'normalize_messages': False, 
-            'message_passing_agg': 'sum',
+            "d_hidden": hidden_units,
+            "l_max_hidden": lmax_hidden,
+            "num_blocks": 2,
+            "num_message_passing_steps": 7,
+            "intermediate_hidden_irreps": True,
+            "task": "node",
+            "output_irreps": output_irreps,
+            "hidden_irreps": hidden_irreps,
+            "normalize_messages": False,
+            "message_passing_agg": "sum",
         }
         gnn = GraphWrapper(
-            model_name='SEGNN',
+            model_name="SEGNN",
             param_dict=hparams,
         )
     else:
         hparams = {
-            'd_hidden': hidden_units,
-            'n_layers': 2,
-            'message_passing_steps': 7,
-            'task': 'node',
-            'message_passing_agg': 'sum',
+            "d_hidden": hidden_units,
+            "n_layers": 2,
+            "message_passing_steps": 7,
+            "task": "node",
+            "message_passing_agg": "sum",
         }
         gnn = GraphWrapper(
-            model_name='GNN',
+            model_name="GNN",
             param_dict=hparams,
         )
 
@@ -222,6 +235,7 @@ if __name__ == "__main__":
         batch_size=batch_size,
         steerable=steerable,
     )
+
     def _mse(p, t):
         return jnp.power(p - t, 2)
 
