@@ -160,6 +160,7 @@ def test_not_equivariant_gnn(
             n_layers=3,
             activation="gelu",
             task="node",
+            d_output=None,
         )
     )
     rng = jax.random.PRNGKey(0)

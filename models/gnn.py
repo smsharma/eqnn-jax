@@ -1,5 +1,4 @@
-import jax
-from typing import Callable, List
+from typing import Optional, Callable, List
 import flax.linen as nn
 import jax.numpy as jnp
 import jraph
@@ -91,7 +90,7 @@ class GNN(nn.Module):
     # Attributes for all MLPs
     message_passing_steps: int = 3
     d_hidden: int = 64
-    d_output: int = 3
+    d_output: Optional[int] = None 
     n_layers: int = 3
     activation: str = "gelu"
 

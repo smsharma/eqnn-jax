@@ -222,6 +222,7 @@ if __name__ == "__main__":
             "message_passing_steps": 7,
             "task": "node",
             "message_passing_agg": "sum",
+            "d_output": 3,
         }
         gnn = GraphWrapper(
             model_name="GNN",
