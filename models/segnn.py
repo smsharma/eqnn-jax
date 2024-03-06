@@ -1,11 +1,8 @@
-from typing import Optional, Tuple, Union, List, Callable
-import dataclasses
+from typing import Optional, Union, List, Callable
 
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-
-import jax.tree_util as tree
 
 import jraph
 from jraph._src import utils
@@ -16,7 +13,6 @@ from e3nn_jax import IrrepsArray
 from e3nn_jax import tensor_product
 from e3nn_jax.flax import Linear
 
-from models.mlp import MLP
 from models.utils.irreps_utils import balanced_irreps
 from models.utils.equivariant_graph_utils import SteerableGraphsTuple
 
@@ -112,8 +108,6 @@ def get_node_mlp_updates(
         m_i = receivers
         if normalize_messages:
             m_i /= n_edges - 1
-            # steerable_node_attrs /= n_edges - 1
-
         m_i = e3nn.concatenate([m_i, nodes], axis=-1)  # Eq. 8 of 2110.02905
         # Gated tensor product steered by geometric feature messages
         for _ in range(n_layers - 1):
@@ -156,6 +150,7 @@ class SEGNN(nn.Module):
     output_irreps: Optional[
         Irreps
     ] = None  # Output irreps for node-wise task; defaults to input irreps
+    hidden_irreps: Optional[Irreps] = None
     normalize_messages: bool = True  # Normalize messages by number of edges
     num_message_passing_steps: int = 3  # Number of message passing steps
     num_blocks: int = 3  # Number of gated tensor products in each message passing step
@@ -180,11 +175,13 @@ class SEGNN(nn.Module):
         graph = graph._replace(nodes=nodes)
         return graph
 
-    def _decode(self, graph: jraph.GraphsTuple, steerable_node_attrs):
+    def _decode(
+        self, hidden_irreps: e3nn.Irreps, graph: jraph.GraphsTuple, steerable_node_attrs
+    ):
         nodes = graph.nodes
-        for i in range(self.num_blocks):
+        for _ in range(self.num_blocks):
             nodes = TensorProductLinearGate(
-                self.output_irreps,
+                hidden_irreps,
                 activation=True,
                 scalar_activation=self.scalar_activation,
                 gate_activation=self.gate_activation,
@@ -224,9 +221,9 @@ class SEGNN(nn.Module):
         pool_fn = getattr(jnp, f"{self.readout_agg}")
         nodes = self.pooling(graph._replace(nodes=nodes), aggregate_fn=pool_fn)
         # post pool mlp (not steerable)
-        for i in range(self.num_blocks):
+        for _ in range(self.num_blocks):
             nodes = TensorProductLinearGate(
-                self.output_irreps,
+                hidden_irreps,
                 activation=True,
                 scalar_activation=self.scalar_activation,
                 gate_activation=self.gate_activation,
@@ -244,9 +241,12 @@ class SEGNN(nn.Module):
         self,
         st_graphs: SteerableGraphsTuple,
     ) -> jraph.GraphsTuple:
-        hidden_irreps = balanced_irreps(
-            lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True
-        )  # For hidden features
+        if self.hidden_irreps is None:
+            hidden_irreps = balanced_irreps(
+                lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True
+            )  # For hidden features
+        else:
+            hidden_irreps = self.hidden_irreps
         irreps_in = st_graphs.nodes.irreps  # Input irreps
         output_irreps = (
             self.output_irreps if self.output_irreps is not None else irreps_in
@@ -303,7 +303,9 @@ class SEGNN(nn.Module):
             # If output irreps differ from input irreps, project to output irreps
             if output_irreps != irreps_in:
                 graphs = self._decode(
-                    graph=graphs, steerable_node_attrs=steerable_node_attrs
+                    hidden_irreps=irreps_intermediate,
+                    graph=graphs,
+                    steerable_node_attrs=steerable_node_attrs,
                 )
             return graphs
         elif self.task == "graph":
@@ -313,7 +315,7 @@ class SEGNN(nn.Module):
                     f"Invalid global aggregation function {self.message_passing_agg}"
                 )
             return self._decode_graph(
-                hidden_irreps=hidden_irreps,
+                hidden_irreps=irreps_intermediate,
                 graph=graphs,
                 steerable_node_attrs=steerable_node_attrs,
             )

@@ -1,8 +1,10 @@
 from typing import Any, NamedTuple, Iterable, Mapping, Union, Optional
 
 import e3nn_jax as e3nn
-from e3nn_jax import Irreps, IrrepsArray
+from e3nn_jax import IrrepsArray
 
+import jax
+from jraph import segment_mean 
 import jax.numpy as jnp
 from .graph_utils import apply_pbc
 
@@ -53,18 +55,23 @@ def get_equivariant_graph(
         normalize=True,
         normalization=spherical_harmonics_norm,
     )
-    steerable_node_attrs = e3nn.scatter_mean(
-        steerable_edge_attrs,
-        dst=receivers,
-        output_size=positions.shape[0],
-    )
+    #TODO: clean this up (should the entire function be part of vmap?)
+    def scatter_mean_wrapper(steerable_edge_attrs, receivers, output_size):
+        return e3nn.scatter_mean(steerable_edge_attrs, dst=receivers, output_size=output_size)
+    # TODO: Why not learn this?
+    steerable_node_attrs = jax.vmap(scatter_mean_wrapper, in_axes=(0,0,None))(
+            steerable_edge_attrs,
+            receivers,
+            positions.shape[1],
+        )
     if steerable_velocities:
-        steerable_node_attrs += e3nn.spherical_harmonics(
+        vel_sph = e3nn.spherical_harmonics(
             attribute_irreps,
-            velocities,
+            input=velocities,
             normalize=True,
             normalization=spherical_harmonics_norm,
         )
+        steerable_node_attrs += vel_sph
     return SteerableGraphsTuple(
         nodes=node_features,
         edges=edges,

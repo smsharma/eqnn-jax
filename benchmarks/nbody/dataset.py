@@ -11,6 +11,11 @@ from jraph import GraphsTuple, segment_mean
 import e3nn_jax as e3nn
 import jax_dataloader as jdl
 
+import sys
+
+sys.path.append("../../models")
+
+from utils.equivariant_graph_utils import get_equivariant_graph, SteerableGraphsTuple
 
 
 class BaseDataset(jdl.Dataset, ABC):
@@ -150,23 +155,11 @@ class ChargedDataset(BaseDataset):
         )
         return loc, vel, edge_attr, charges, target_loc
 
-
-class SteerableGraphsTuple(NamedTuple):
-    """Pack (steerable) node and edge attributes with jraph.GraphsTuple."""
-
-    graph: jraph.GraphsTuple
-    node_attributes: Optional[e3nn.IrrepsArray] = None
-    edge_attributes: Optional[e3nn.IrrepsArray] = None
-    # NOTE: additional_message_features is in a separate field otherwise it would get
-    #  updated by jraph.GraphNetwork. Actual graph edges are used only for the messages.
-    additional_message_features: Optional[e3nn.IrrepsArray] = None
-
-
-
 def NbodyGraphTransform(
     dataset_name: str,
     n_nodes: int,
     batch_size: int,
+    lmax_attributes: int,
 ) -> Callable:
     """
     Build a function that converts torch DataBatch into SteerableGraphsTuple.
@@ -183,21 +176,34 @@ def NbodyGraphTransform(
         _ = training
         loc, vel, _, q, targets = data
         # substract center of the system:
+        targets = targets - loc
         loc = loc - loc.mean(axis=1, keepdims=True)
         senders, receivers = full_edge_indices[:,:,0], full_edge_indices[:,:, 1]
         vel_modulus = jnp.linalg.norm(vel, axis=-1, keepdims=True)
-        st_graph = SteerableGraphsTuple(
-            graph=GraphsTuple(
-                nodes=e3nn.IrrepsArray("1o + 1o + 2x0e",jnp.concatenate([loc, vel, vel_modulus, q], axis=-1)),
-                edges=None,
-                senders=senders,
-                receivers=receivers,
-                n_node=jnp.array([n_nodes] * len(loc)),
-                n_edge=jnp.array([senders.shape[-1]]*len(loc)),
-                globals=None,
-            )
+        x_i = loc[jnp.arange(loc.shape[0])[:, None], senders, :]
+        x_j = loc[jnp.arange(loc.shape[0])[:, None], receivers, :]
+        q_i = q[jnp.arange(q.shape[0])[:, None], senders, :]
+        q_j = q[jnp.arange(q.shape[0])[:, None], receivers, :]
+        d_ij = jnp.sqrt(jnp.sum((x_i-x_j)**2, axis=-1, keepdims=True))
+        q_ij = q_i * q_j
+        additional_messages = e3nn.IrrepsArray(
+            "2x0e",
+            jnp.concatenate([d_ij, q_ij], axis=-1),
         )
-        targets = targets - loc
+        st_graph = get_equivariant_graph(
+            node_features=e3nn.IrrepsArray("1o + 1o + 2x0e",jnp.concatenate([loc, vel, vel_modulus, q], axis=-1)),
+            positions=loc,
+            velocities=vel,
+            senders=senders,
+            receivers=receivers,
+            n_node=jnp.array([n_nodes] * len(loc)),
+            n_edge=jnp.array([senders.shape[-1]]*len(loc)),
+            globals=None,
+            edges=None,
+            lmax_attributes=lmax_attributes,
+            additional_messages=additional_messages,
+            steerable_velocities=True,
+        )
         return st_graph, targets
 
     return _to_steerable_graph
@@ -214,16 +220,12 @@ def numpy_collate(batch):
 
 
 def setup_nbody_data(
-    node_irreps,
-    additional_message_irreps,
-    o3_layer="tpl",
     lmax_attributes=1,
     dataset="charged",
     dataset_name="small",
     max_samples=3000,
     n_bodies=5,
     batch_size=100,
-    target="pos",
 ):
     if dataset == "charged":
         dataset_train = ChargedDataset(
@@ -246,6 +248,7 @@ def setup_nbody_data(
         n_nodes=n_bodies,
         batch_size=batch_size,
         dataset_name=dataset,
+        lmax_attributes=lmax_attributes,
     )
     loader_train = jdl.DataLoader(
         dataset_train,
