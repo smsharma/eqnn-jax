@@ -91,6 +91,7 @@ class GNN(nn.Module):
     # Attributes for all MLPs
     message_passing_steps: int = 3
     d_hidden: int = 64
+    d_output: int = 3
     n_layers: int = 3
     activation: str = "gelu"
 
@@ -168,6 +169,11 @@ class GNN(nn.Module):
         readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
 
         if self.task == "node":
+            if self.d_output is not None:
+                nodes = MLP([self.d_hidden] * (self.n_layers-1) + [self.d_output], activation=activation)(processed_graphs.nodes)
+                processed_graphs = processed_graphs._replace(
+                    nodes=nodes, 
+                )
             return processed_graphs
 
         elif self.task == "graph":

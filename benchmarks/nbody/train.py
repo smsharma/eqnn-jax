@@ -18,18 +18,23 @@ import sys
 
 sys.path.append("../../")
 from models.segnn import SEGNN
-from models.utils.irreps_utils import balanced_irreps, weight_balanced_irreps
+from models.gnn import GNN
+from models.utils.irreps_utils import weight_balanced_irreps
 
 
-@partial(jit, static_argnames=["model_fn", "criterion",  "eval_trn"])
+@partial(jit, static_argnames=["model_fn", "criterion",  "eval_trn", "steerable"])
 def loss_fn_wrapper(
     params: hk.Params,
     st_graph: SteerableGraphsTuple,
     target: jnp.ndarray,
     model_fn: Callable,
     criterion: Callable,
+    steerable: bool,
 ) -> Tuple[float, hk.State]:
-    pred = model_fn(params, st_graph).nodes.array
+    if steerable:
+        pred = model_fn(params, st_graph).nodes.array
+    else:
+        pred = model_fn(params, st_graph).nodes
     assert target.shape == pred.shape
     return jnp.mean(criterion(pred, target)) 
 
@@ -154,6 +159,9 @@ class GraphWrapper(nn.Module):
     def __call__(self, x):
         if self.model_name == 'SEGNN':
             return jax.vmap(SEGNN(**self.param_dict))(x)
+        elif self.model_name == 'GNN':
+            return jax.vmap(GNN(**self.param_dict))(x)
+
         else:
             raise ValueError('Please specify a valid model name.')
 
@@ -161,6 +169,7 @@ class GraphWrapper(nn.Module):
 if __name__ == "__main__":
     key = jax.random.PRNGKey(1337)
     task = "node"
+    steerable = False
     hidden_units = 64
     lmax_attributes = 1
     lmax_hidden = 1
@@ -176,38 +185,51 @@ if __name__ == "__main__":
         scalar_units = hidden_units,
         irreps_right=attr_irreps,
     )
-    segnn_params = {
-        'd_hidden': hidden_units,
-        'l_max_hidden': lmax_hidden,
-        'num_blocks': 2,
-        'num_message_passing_steps': 7,
-        'intermediate_hidden_irreps': True, 
-        'task': 'node',
-        'output_irreps': output_irreps,
-        'hidden_irreps': hidden_irreps,
-        'normalize_messages': False, 
-        'message_passing_agg': 'sum',
+    if steerable:
+        hparams = {
+            'd_hidden': hidden_units,
+            'l_max_hidden': lmax_hidden,
+            'num_blocks': 2,
+            'num_message_passing_steps': 7,
+            'intermediate_hidden_irreps': True, 
+            'task': 'node',
+            'output_irreps': output_irreps,
+            'hidden_irreps': hidden_irreps,
+            'normalize_messages': False, 
+            'message_passing_agg': 'sum',
+        }
+        gnn = GraphWrapper(
+            model_name='SEGNN',
+            param_dict=hparams,
+        )
+    else:
+        hparams = {
+            'd_hidden': hidden_units,
+            'n_layers': 2,
+            'message_passing_steps': 7,
+            'task': 'node',
+            'message_passing_agg': 'sum',
+        }
+        gnn = GraphWrapper(
+            model_name='GNN',
+            param_dict=hparams,
+        )
 
-    }
-    print(segnn_params)
-
-    segnn = GraphWrapper(
-        model_name='SEGNN',
-        param_dict=segnn_params,
-    )
+    print(hparams)
 
     loader_train, loader_val, loader_test, graph_transform = setup_nbody_data(
         lmax_attributes=lmax_attributes,
         batch_size=batch_size,
+        steerable=steerable,
     )
     def _mse(p, t):
         return jnp.power(p - t, 2)
 
-    loss_fn = partial(loss_fn_wrapper, criterion=_mse,)
+    loss_fn = partial(loss_fn_wrapper, criterion=_mse, steerable=steerable)
 
     train(
         key=key,
-        segnn=segnn,
+        segnn=gnn,
         loader_train=loader_train,
         loader_val=loader_val,
         loader_test=loader_test,
