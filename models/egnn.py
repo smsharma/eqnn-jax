@@ -9,9 +9,19 @@ from utils.graph_utils import fourier_features
 from models.mlp import MLP
 
 
-def get_edge_mlp_updates(d_hidden, n_layers, activation, position_only=False, use_fourier_features=False, fourier_feature_kwargs={"num_encodings": 16, "include_self": True}, tanh_out=False, soft_edges=False) -> Callable:
-
-    def update_fn(edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
+def get_edge_mlp_updates(
+    d_hidden,
+    n_layers,
+    activation,
+    position_only=False,
+    use_fourier_features=False,
+    fourier_feature_kwargs={"num_encodings": 16, "include_self": True},
+    tanh_out=False,
+    soft_edges=False,
+) -> Callable:
+    def update_fn(
+        edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
+    ) -> jnp.array:
         """update edge features
 
         Args:
@@ -49,15 +59,31 @@ def get_edge_mlp_updates(d_hidden, n_layers, activation, position_only=False, us
                     concats = jnp.concatenate([concats, globals], -1)
 
         # Messages from Eqs. (3) and (4)/(7)
-        phi_e = MLP([d_hidden] * (n_layers - 1) + [d_hidden], activation=activation, activate_final=True)
+        phi_e = MLP(
+            [d_hidden] * (n_layers - 1) + [d_hidden],
+            activation=activation,
+            activate_final=True,
+        )
 
         # Super special init for last layer of position MLP (from https://github.com/lucidrains/egnn-pytorch)
-        phi_x = MLP([d_hidden] * (n_layers - 1), activation=activation, activate_final=True)
-        phi_x_last_layer = nn.Dense(1, use_bias=False, kernel_init=jax.nn.initializers.variance_scaling(scale=1e-2, mode="fan_in", distribution="uniform"))
+        phi_x = MLP(
+            [d_hidden] * (n_layers - 1), activation=activation, activate_final=True
+        )
+        phi_x_last_layer = nn.Dense(
+            1,
+            use_bias=False,
+            kernel_init=jax.nn.initializers.variance_scaling(
+                scale=1e-2, mode="fan_in", distribution="uniform"
+            ),
+        )
 
         # Relative distances, optionally with Fourier features
         d_ij2 = jnp.sum((x_i - x_j) ** 2, axis=1, keepdims=True)
-        d_ij2 = fourier_features(d_ij2, **fourier_feature_kwargs) if use_fourier_features else d_ij2
+        d_ij2 = (
+            fourier_features(d_ij2, **fourier_feature_kwargs)
+            if use_fourier_features
+            else d_ij2
+        )
 
         # Get invariants
         message_scalars = d_ij2
@@ -88,9 +114,18 @@ def get_edge_mlp_updates(d_hidden, n_layers, activation, position_only=False, us
     return update_fn
 
 
-def get_node_mlp_updates(d_hidden, n_layers, activation, n_edges, position_only=False, normalize_messages=False, decouple_pos_vel_updates=False) -> Callable:
-
-    def update_fn(nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array) -> jnp.array:
+def get_node_mlp_updates(
+    d_hidden,
+    n_layers,
+    activation,
+    n_edges,
+    position_only=False,
+    normalize_messages=False,
+    decouple_pos_vel_updates=False,
+) -> Callable:
+    def update_fn(
+        nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
+    ) -> jnp.array:
         """update edge features
 
         Args:
@@ -116,7 +151,9 @@ def get_node_mlp_updates(d_hidden, n_layers, activation, n_edges, position_only=
             else:  # Additional scalar attributes
                 x_i, h_i = nodes[..., :3], nodes[..., 3:]
                 x_i_p = x_i + sum_x_ij
-                phi_h = MLP([d_hidden] * (n_layers - 1) + [h_i.shape[-1]], activation=activation)
+                phi_h = MLP(
+                    [d_hidden] * (n_layers - 1) + [h_i.shape[-1]], activation=activation
+                )
                 concats = jnp.concatenate([h_i, m_i], -1)
                 if globals is not None:
                     concats = jnp.concatenate([concats, globals], -1)
@@ -141,7 +178,9 @@ def get_node_mlp_updates(d_hidden, n_layers, activation, n_edges, position_only=
 
                 if decouple_pos_vel_updates:
                     # Decouple position and velocity updates
-                    phi_xx = MLP([d_hidden] * (n_layers - 1) + [1], activation=activation)
+                    phi_xx = MLP(
+                        [d_hidden] * (n_layers - 1) + [1], activation=activation
+                    )
                     x_i_p = phi_xx(concats) * x_i + v_i_p
                 else:
                     # Assumes dynamical system with coupled position and velocity updates, as in original paper!
@@ -149,11 +188,17 @@ def get_node_mlp_updates(d_hidden, n_layers, activation, n_edges, position_only=
 
                 return jnp.concatenate([x_i_p, v_i, concats], -1)
             else:  # Additional scalar attributes
-                x_i, v_i, h_i = nodes[:, :3], nodes[:, 3:6], nodes[:, 6:]  # Split node attrs
+                x_i, v_i, h_i = (
+                    nodes[:, :3],
+                    nodes[:, 3:6],
+                    nodes[:, 6:],
+                )  # Split node attrs
 
                 # From Eqs. (6) and (7)
                 phi_v = MLP([d_hidden] * (n_layers - 1) + [1], activation=activation)
-                phi_h = MLP([d_hidden] * (n_layers - 1) + [h_i.shape[-1]], activation=activation)
+                phi_h = MLP(
+                    [d_hidden] * (n_layers - 1) + [h_i.shape[-1]], activation=activation
+                )
 
                 concats = h_i
                 if globals is not None:
@@ -164,7 +209,9 @@ def get_node_mlp_updates(d_hidden, n_layers, activation, n_edges, position_only=
 
                 if decouple_pos_vel_updates:
                     # Decouple position and velocity updates
-                    phi_xx = MLP([d_hidden] * (n_layers - 1) + [1], activation=activation)
+                    phi_xx = MLP(
+                        [d_hidden] * (n_layers - 1) + [1], activation=activation
+                    )
                     x_i_p = phi_xx(concats) * x_i + v_i_p
                 else:
                     # Assumes dynamical system with coupled position and velocity updates, as in original paper!
@@ -192,13 +239,17 @@ class EGNN(nn.Module):
     positions_only: bool = False  # (pos, vel, scalars) vs (pos, scalars)
     tanh_out: bool = False
     normalize_messages: bool = True  # Divide sum_x_ij by (n_edges - 1)
-    decouple_pos_vel_updates: bool = False  # Use extra MLP to decouple position and velocity updates
+    decouple_pos_vel_updates: bool = (
+        False  # Use extra MLP to decouple position and velocity updates
+    )
 
     message_passing_agg: str = "sum"  # "sum", "mean", "max"
     readout_agg: str = "mean"
     mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "graph"  # "graph" or "node"
-    readout_only_positions: bool = False  # Graph-level readout only uses positions; otherwise use all features
+    readout_only_positions: bool = (
+        False  # Graph-level readout only uses positions; otherwise use all features
+    )
     n_outputs: int = 1  # Number of outputs for graph-level readout
 
     @nn.compact
@@ -215,27 +266,50 @@ class EGNN(nn.Module):
         processed_graphs = graphs
 
         if processed_graphs.globals is not None:
-            processed_graphs = processed_graphs._replace(globals=processed_graphs.globals.reshape(1, -1))
+            processed_graphs = processed_graphs._replace(
+                globals=processed_graphs.globals.reshape(1, -1)
+            )
 
         activation = getattr(nn, self.activation)
 
         if self.message_passing_agg not in ["sum", "mean", "max"]:
-            raise ValueError(f"Invalid message passing aggregation function {self.message_passing_agg}")
+            raise ValueError(
+                f"Invalid message passing aggregation function {self.message_passing_agg}"
+            )
 
-        aggregate_edges_for_nodes_fn = getattr(utils, f"segment_{self.message_passing_agg}")
+        aggregate_edges_for_nodes_fn = getattr(
+            utils, f"segment_{self.message_passing_agg}"
+        )
 
         # Apply message-passing rounds
         for _ in range(self.message_passing_steps):
             # Node and edge update functions
             update_node_fn = get_node_mlp_updates(
-                self.d_hidden, self.n_layers, activation, n_edges=processed_graphs.n_edge, position_only=self.positions_only, normalize_messages=self.normalize_messages, decouple_pos_vel_updates=self.decouple_pos_vel_updates
+                self.d_hidden,
+                self.n_layers,
+                activation,
+                n_edges=processed_graphs.n_edge,
+                position_only=self.positions_only,
+                normalize_messages=self.normalize_messages,
+                decouple_pos_vel_updates=self.decouple_pos_vel_updates,
             )
             update_edge_fn = get_edge_mlp_updates(
-                self.d_hidden, self.n_layers, activation, position_only=self.positions_only, use_fourier_features=self.use_fourier_features, fourier_feature_kwargs=self.fourier_feature_kwargs, tanh_out=self.tanh_out, soft_edges=self.soft_edges
+                self.d_hidden,
+                self.n_layers,
+                activation,
+                position_only=self.positions_only,
+                use_fourier_features=self.use_fourier_features,
+                fourier_feature_kwargs=self.fourier_feature_kwargs,
+                tanh_out=self.tanh_out,
+                soft_edges=self.soft_edges,
             )
 
             # Instantiate graph network and apply EGCL
-            graph_net = jraph.GraphNetwork(update_node_fn=update_node_fn, update_edge_fn=update_edge_fn, aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn)
+            graph_net = jraph.GraphNetwork(
+                update_node_fn=update_node_fn,
+                update_edge_fn=update_edge_fn,
+                aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn,
+            )
             processed_graphs = graph_net(processed_graphs)
 
         if self.task == "node":
@@ -245,7 +319,9 @@ class EGNN(nn.Module):
             # Aggregate residual node features; only use positions, optionally
 
             if self.readout_agg not in ["sum", "mean", "max"]:
-                raise ValueError(f"Invalid global aggregation function {self.message_passing_agg}")
+                raise ValueError(
+                    f"Invalid global aggregation function {self.message_passing_agg}"
+                )
 
             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
             if self.readout_only_positions:
@@ -254,7 +330,9 @@ class EGNN(nn.Module):
                 agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
 
             # Readout and return
-            out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
+            out = MLP(
+                [w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs]
+            )(agg_nodes)
             return out
 
         else:
