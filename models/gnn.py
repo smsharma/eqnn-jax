@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import jraph
 from jraph._src import utils
 
-from utils.graph_utils import fourier_features
+# from utils.graph_utils import fourier_features
 from models.mlp import MLP
 
 
@@ -90,7 +90,7 @@ class GNN(nn.Module):
     # Attributes for all MLPs
     message_passing_steps: int = 3
     d_hidden: int = 64
-    d_output: Optional[int] = None 
+    d_output: Optional[int] = None
     n_layers: int = 3
     activation: str = "gelu"
 
