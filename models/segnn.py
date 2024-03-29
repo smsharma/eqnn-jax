@@ -13,6 +13,7 @@ from e3nn_jax import IrrepsArray
 from e3nn_jax import tensor_product
 from e3nn_jax.flax import Linear
 
+from models.mlp import MLP
 from models.utils.irreps_utils import balanced_irreps
 from models.utils.equivariant_graph_utils import SteerableGraphsTuple
 
@@ -162,6 +163,7 @@ class SEGNN(nn.Module):
     intermediate_hidden_irreps: bool = True  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
     scalar_activation: str = "silu"  # Activation function for scalars
     gate_activation: str = "sigmoid"  # Activation function for gate scalars
+    n_outputs: int = 1
 
     def _embed(
         self,
@@ -234,7 +236,7 @@ class SEGNN(nn.Module):
             self.output_irreps,
             activation=False,
         )(nodes)
-        return nodes
+        return nodes.array
 
     @nn.compact
     def __call__(
@@ -299,6 +301,8 @@ class SEGNN(nn.Module):
             else:
                 graphs = processed_graphs
 
+        # Check dims of hidden irreps
+
         if self.task == "node":
             # If output irreps differ from input irreps, project to output irreps
             if output_irreps != irreps_in:
@@ -319,5 +323,14 @@ class SEGNN(nn.Module):
                 graph=graphs,
                 steerable_node_attrs=steerable_node_attrs,
             )
+            # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
+#             irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
+#             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
+#             nodes_pre_pool = nn.Dense(self.d_hidden)(TensorProductLinearGate(irreps_pre_pool, activation=False)(graphs.nodes, steerable_node_attrs).array)
+#             agg_nodes = readout_agg_fn(nodes_pre_pool, axis=0)
+
+#             # Readout and return
+#             out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
+#             return out
         else:
             raise ValueError(f"Invalid task {self.task}")

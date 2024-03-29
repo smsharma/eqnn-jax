@@ -36,6 +36,8 @@ def get_node_mlp_updates(d_hidden, n_layers, activation):
         Returns:
             jnp.ndarray: updated node features
         """
+        # softmax over recievers
+
         if received_attributes is not None:
             inputs = jnp.concatenate([nodes, received_attributes], axis=1)
         else:  # If lone node
@@ -117,10 +119,10 @@ class GNN(nn.Module):
 
         processed_graphs = graphs
 
-        if processed_graphs.globals is not None:
-            processed_graphs = processed_graphs._replace(
-                globals=processed_graphs.globals.reshape(1, -1)
-            )
+        # if processed_graphs.globals is not None:
+        #     processed_graphs = processed_graphs._replace(
+        #         globals=processed_graphs.globals.reshape(1, -1)
+        #     )
 
         activation = getattr(nn, self.activation)
 
@@ -184,14 +186,19 @@ class GNN(nn.Module):
                 agg_nodes = readout_agg_fn(processed_graphs.nodes[:, :3], axis=0)
             else:
                 agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
+                
+            if processed_graphs.globals is not None:
+                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
 
             # Readout and return
-            out = MLP(
-                [w * self.d_hidden for w in self.mlp_readout_widths]
-                + [
-                    self.n_outputs,
-                ]
-            )(agg_nodes)
+            mlp = MLP([self.mlp_readout_widths[0] * agg_nodes.shape[-1]] + [w * self.d_hidden for w in self.mlp_readout_widths[:-1]] + [self.n_outputs,])                                                                        
+            # out = MLP(
+            #     [w * self.d_hidden for w in self.mlp_readout_widths]
+            #     + [
+            #         self.n_outputs,
+            #     ]
+            # )(agg_nodes)
+            out = mlp(agg_nodes)                                                             
             return out
 
         else:
