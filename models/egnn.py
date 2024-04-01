@@ -251,6 +251,7 @@ class EGNN(nn.Module):
         False  # Graph-level readout only uses positions; otherwise use all features
     )
     n_outputs: int = 1  # Number of outputs for graph-level readout
+    d_output: int = 3
 
     @nn.compact
     def __call__(self, graphs: jraph.GraphsTuple) -> jraph.GraphsTuple:

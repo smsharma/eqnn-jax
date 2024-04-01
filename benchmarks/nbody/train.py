@@ -1,5 +1,7 @@
 from functools import partial
+import pickle
 import itertools
+from pathlib import Path
 
 from typing import Callable, Tuple, Dict
 
@@ -19,10 +21,11 @@ import sys
 sys.path.append("../../")
 from models.segnn import SEGNN
 from models.gnn import GNN
+from models.egnn import EGNN
 from models.utils.irreps_utils import weight_balanced_irreps
 
 
-@partial(jit, static_argnames=["model_fn", "criterion", "eval_trn", "steerable"])
+@partial(jit, static_argnames=["model_fn", "criterion", "eval_trn", "steerable", "egnn", "global_task"])
 def loss_fn_wrapper(
     params: hk.Params,
     st_graph: SteerableGraphsTuple,
@@ -30,11 +33,21 @@ def loss_fn_wrapper(
     model_fn: Callable,
     criterion: Callable,
     steerable: bool,
+    egnn: bool,
+    global_task: bool = False,
 ) -> Tuple[float, hk.State]:
-    if steerable:
-        pred = model_fn(params, st_graph).nodes.array
+    if not global_task:
+        if steerable:
+            pred = model_fn(params, st_graph).nodes.array
+        else:
+            pred = model_fn(params, st_graph).nodes
+            if egnn:
+                pred = pred[...,:3]
     else:
-        pred = model_fn(params, st_graph).nodes
+        if steerable:
+            pred = model_fn(params, st_graph).array.squeeze()
+        else:
+            pred = model_fn(params, st_graph)
     assert target.shape == pred.shape
     return jnp.mean(criterion(pred, target))
 
@@ -77,7 +90,7 @@ def train(
     loader_test,
     loss_fn,
     graph_transform,
-    n_steps=10_000_000,
+    n_steps=10_000,#10_000_000,
     lr=5.0e-4,
     lr_scheduling=False,
     weight_decay=1.0e-12,
@@ -91,7 +104,7 @@ def train(
     )
     print(
         f"Starting {n_steps} steps"
-        f"with {hk.data_structures.tree_size(params)} parameters.\n"
+        f" with {hk.data_structures.tree_size(params)} parameters.\n"
         "Jitting..."
     )
 
@@ -121,6 +134,11 @@ def train(
     iter_loader = iter(loader_train)
     iter_loader = itertools.cycle(iter_loader)
 
+    loss_curve = {
+        'step': [],
+        'train': [],
+        'val': [],
+    }
     for step in range(n_steps):
         data = next(iter_loader)
         graph, target = graph_transform(data)
@@ -149,6 +167,9 @@ def train(
                 )
             else:
                 tag = ""
+            loss_curve['step'].append(step)
+            loss_curve['train'].append(loss)
+            loss_curve['val'].append(val_loss)
 
             print(f" - val loss {val_loss:.6f}{tag}", end="")
             print()
@@ -157,11 +178,13 @@ def train(
         loader_test,
         params=params,
     )
+    loss_curve['test'] = test_loss
     # ignore compilation time
     print(
         "Training done.\n"
         f"Final test loss {test_loss:.6f} - checkpoint test loss {test_loss_ckp:.6f}.\n"
     )
+    return loss_curve
 
 
 class GraphWrapper(nn.Module):
@@ -174,15 +197,18 @@ class GraphWrapper(nn.Module):
             return jax.vmap(SEGNN(**self.param_dict))(x)
         elif self.model_name == "GNN":
             return jax.vmap(GNN(**self.param_dict))(x)
-
+        elif self.model_name == "EGNN":
+            return jax.vmap(EGNN(**self.param_dict))(x)
         else:
             raise ValueError("Please specify a valid model name.")
 
 
 if __name__ == "__main__":
+    out_path = Path('/n/holystore01/LABS/itc_lab/Users/ccuestalazaro/benchmark_equivariance_results')
     key = jax.random.PRNGKey(1337)
-    task = "node"
-    steerable = False
+    model = 'segnn'
+    task = "graph"
+    steerable = True if model == 'segnn' else False 
     hidden_units = 64
     lmax_attributes = 1
     lmax_hidden = 1
@@ -198,14 +224,14 @@ if __name__ == "__main__":
         scalar_units=hidden_units,
         irreps_right=attr_irreps,
     )
-    if steerable:
+    if model == 'segnn':
         hparams = {
             "d_hidden": hidden_units,
             "l_max_hidden": lmax_hidden,
             "num_blocks": 2,
             "num_message_passing_steps": 7,
             "intermediate_hidden_irreps": True,
-            "task": "node",
+            "task": task,
             "output_irreps": output_irreps,
             "hidden_irreps": hidden_irreps,
             "normalize_messages": False,
@@ -215,34 +241,52 @@ if __name__ == "__main__":
             model_name="SEGNN",
             param_dict=hparams,
         )
-    else:
+    elif model == 'gnn':
         hparams = {
             "d_hidden": hidden_units,
             "n_layers": 2,
             "message_passing_steps": 7,
-            "task": "node",
+            "task": task,
             "message_passing_agg": "sum",
             "d_output": 3,
+            "n_outputs": 3,
         }
         gnn = GraphWrapper(
             model_name="GNN",
             param_dict=hparams,
         )
-
+    elif model == 'egnn':
+        hparams = {
+            "d_hidden": hidden_units,
+            "n_layers": 2,
+            "message_passing_steps": 7,
+            "task": task,
+            "message_passing_agg": "sum",
+            "positions_only": False,
+            'tanh_out': False,
+            "n_outputs": 3,
+        }
+        gnn = GraphWrapper(
+            model_name="EGNN",
+            param_dict=hparams,
+        )
+    else:
+        raise ValueError(f'{model} model is not implemented')
     print(hparams)
 
     loader_train, loader_val, loader_test, graph_transform = setup_nbody_data(
         lmax_attributes=lmax_attributes,
         batch_size=batch_size,
         steerable=steerable,
+        task=task,
     )
 
     def _mse(p, t):
         return jnp.power(p - t, 2)
 
-    loss_fn = partial(loss_fn_wrapper, criterion=_mse, steerable=steerable)
+    loss_fn = partial(loss_fn_wrapper, criterion=_mse, steerable=steerable, egnn=True if model=='egnn' else False, global_task=True if task == 'graph' else False)
 
-    train(
+    loss_curve = train(
         key=key,
         segnn=gnn,
         loader_train=loader_train,
@@ -251,3 +295,7 @@ if __name__ == "__main__":
         loss_fn=loss_fn,
         graph_transform=graph_transform,
     )
+    # store loss curve with pickle
+    with open(out_path / f'task={task}_model={model}.pkl', 'wb') as f:
+        pickle.dump(loss_curve, f)
+
