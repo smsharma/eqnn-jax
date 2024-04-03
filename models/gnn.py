@@ -147,7 +147,9 @@ class GNN(nn.Module):
 
             # Instantiate graph network and apply EGCL
             graph_net = jraph.GraphNetwork(
-                update_node_fn=update_node_fn, update_edge_fn=update_edge_fn
+                update_node_fn=update_node_fn, 
+                update_edge_fn=update_edge_fn,
+                aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn
             )
 
             processed_graphs = graph_net(processed_graphs)
@@ -189,9 +191,11 @@ class GNN(nn.Module):
                 
             if processed_graphs.globals is not None:
                 agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
+                norm = nn.LayerNorm()
+                agg_nodes = norm(agg_nodes)
 
             # Readout and return
-            mlp = MLP([self.mlp_readout_widths[0] * agg_nodes.shape[-1]] + [w * self.d_hidden for w in self.mlp_readout_widths[:-1]] + [self.n_outputs,])                                                                        
+            mlp = MLP([self.mlp_readout_widths[0] * agg_nodes.shape[-1]] + [w * self.d_hidden for w in self.mlp_readout_widths[1:]] + [self.n_outputs,])                                                                        
             # out = MLP(
             #     [w * self.d_hidden for w in self.mlp_readout_widths]
             #     + [

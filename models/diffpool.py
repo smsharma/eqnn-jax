@@ -102,7 +102,7 @@ class DiffPool(nn.Module):
             else:
                 raise ValueError(f"Unknown combine_hierarchies_method: {self.combine_hierarchies_method}")
             
-            mlp = MLP([self.mlp_readout_widths[0] * x_pool.shape[-1]] + [w * self.d_hidden for w in self.mlp_readout_widths[:-1]] + [self.n_outputs,])                                                         
+            mlp = MLP([self.mlp_readout_widths[0] * x_pool.shape[-1]] + [w * self.d_hidden for w in self.mlp_readout_widths[1:]] + [self.n_outputs,])                                                         
             out = mlp(x_pool)                                                             
             return out
         

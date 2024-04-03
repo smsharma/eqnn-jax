@@ -51,7 +51,9 @@ class TensorProductLinearGate(nn.Module):
             gradient_normalization=self.gradient_normalization,
             path_normalization=self.path_normalization,
         )
+        # print('prod:', tensor_product(x, y))
         out = linear(tensor_product(x, y))
+        # print('out:', out)
         if self.activation:
             scalar_activation = getattr(jax.nn, self.scalar_activation)
             gate_activation = getattr(jax.nn, self.gate_activation)

@@ -83,21 +83,24 @@ def build_graph(halos,
                 use_rbf=False,
                 sigma_num=8):
     
-    if mean is not None and std is not None:
-        halos = halos * std + mean
-        halos /= boxsize
-        
+    # if mean is not None and std is not None:
+    #     halos = halos * std + mean
+    #     halos /= boxsize
+
     n_batch = len(halos)
     
     if use_pbc:
-        cell = unit_cell
+        if std is not None:
+            halos += std[:3]
+            cell = np.diag(boxsize/std[:3])
+        else:
+            cell = np.array([[1.,0.,0.,],[0.,1.,0.], [0.,0.,1.]])
     else:
         cell = None
         
     sources, targets, distances = jax.vmap(partial(nearest_neighbors), in_axes=(0, None, None))(halos[..., :3], k, cell)
-    if mean is not None and std is not None:
-        distances /= std[:3]
-        halos = (halos - mean) / std
+    if use_pbc and std is not None:
+        halos -= std[:3]
     
     if use_edges:
         edges = np.sqrt(np.sum(distances **2, axis=-1, keepdims=True))
@@ -109,13 +112,17 @@ def build_graph(halos,
             edges = np.concatenate(edges, axis=-1)
     else:
         edges = None
-            
+
+    print('node features')
+    print(halos)
+    print('edge features')
+    print(edges.shape)
     
     return jraph.GraphsTuple(
             n_node=np.array([[halos.shape[1]]]*n_batch),
             n_edge=np.array(n_batch * [[k]]),
             nodes=halos,
-            edges=np.sqrt(np.sum(distances **2, axis=-1, keepdims=True)) if use_edges else None,
+            edges=edges,
             globals=tpcfs,
             senders=sources,
             receivers=targets,

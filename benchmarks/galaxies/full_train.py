@@ -34,7 +34,7 @@ from models.egnn import EGNN
 from models.segnn import SEGNN
 from models.diffpool import DiffPool
 
-from benchmarks.galaxies.dynamic_dataset import GalaxyDataset
+from benchmarks.galaxies.dataset import get_halo_dataset
 
 
 GNN_PARAMS = {
@@ -76,10 +76,10 @@ DIFFPOOL_PARAMS = {
     "d_downsampling_factor": 5, 
     "k": 15,
     "gnn_kwargs": GNN_PARAMS,
-    "combine_hierarchies_method": 'concat',
+    "combine_hierarchies_method": 'mean',
     "use_edge_features": True,
     "task": 'graph',
-    'mlp_readout_widths': [8, 2, 2],}
+    'mlp_readout_widths': [8, 2],}
 
 
 SEGNN_PARAMS = {
@@ -97,9 +97,6 @@ SEGNN_PARAMS = {
     "normalize_messages": True,
     "message_passing_agg": "mean",
 }
-# SEGNN_PARAMS['hidden_irreps'] = None
-        
-
 
 class GraphWrapper(nn.Module):
     model_name: str
@@ -225,8 +222,7 @@ def run_expt(model_name,
     
     # Create experiment directory
     experiments_base_dir = Path(__file__).parent / 'experiments/'
-    d_hidden = param_dict['d_hidden']
-    experiment_id = f'{model_name}_{feats}_{n_batch}_{n_steps}_{d_hidden}_{K}_' + \
+    experiment_id = f'{model_name}_{feats}_{n_batch}_{n_steps}_{K}_' + \
                     use_tpcf + \
                     '_rbf'*use_rbf 
     
@@ -236,53 +232,51 @@ def run_expt(model_name,
 
     print('Loading dataset...')
     if feats == 'pos':
-        D = GalaxyDataset(data_dir, use_pos=True, use_vel=False, use_tpcf=use_tpcf)
+        features = ['x', 'y', 'z']
     elif feats == 'all':
-        D = GalaxyDataset(data_dir, use_pos=True, use_vel=True, use_tpcf=use_tpcf)
+        features = ['x', 'y', 'z', 'vx', 'vy', 'vz']
     else:
         raise NotImplementedError
+    targets = ['Omega_m']
         
-    halo_train, halo_val, halo_test = D.halos_train, D.halos_val, D.halos_test
-    num_train_sims = halo_train.shape[0]
-    mean, std = D.halos_mean, D.halos_std
+    train_dataset, n_train, mean, std, _, _ = get_halo_dataset(batch_size=n_batch,  # Batch size
+                                                                       num_samples=n_train,  # If not None, will only take a subset of the dataset
+                                                                       split='train',  # 'train', 'val', 'test'
+                                                                       standardize=True,  # If True, will standardize the features
+                                                                       return_mean_std=True,  # If True, will return (dataset, num_total, mean, std, mean_params, std_params), else (dataset, num_total)
+                                                                       seed=42,  # Random seed
+                                                                       features=features,  # Features to include
+                                                                       params=targets,  # Parameters to include
+                                                                       use_tpcf=use_tpcf
+                                                                    )
+    mean, std = mean.numpy(), std.numpy()
     norm_dict = {'mean': mean, 'std': std}
+    train_iter = iter(train_dataset)
+    halo_train, omega_m_train = next(train_iter)
     
-    omega_m_train, omega_m_val, omega_m_test = D.omega_m_train, D.omega_m_val, D.omega_m_test
+    val_dataset, n_val = get_halo_dataset(batch_size=200,  
+                                           num_samples=400, 
+                                           split='val',
+                                           standardize=True, 
+                                           return_mean_std=False,  
+                                           seed=42,
+                                           features=features, 
+                                           params=targets,
+                                           use_tpcf=use_tpcf
+                                        )
+    val_iter = iter(val_dataset)
+    halo_val, omega_m_val = next(val_iter)
+    halo_test, omega_m_test = next(val_iter)
+
+    # Convert to numpy arrays
+    halo_train, omega_m_train = halo_train.numpy(), omega_m_train.numpy()
+    halo_val, omega_m_val = halo_val.numpy(), omega_m_val.numpy()
+    halo_test, omega_m_test = halo_test.numpy(), omega_m_test.numpy()
     
-    if use_tpcf != 'none':
-        if use_tpcf == 'small':
-            tpcf_idx = list(range(8))
-        elif use_tpcf == 'large':
-            tpcf_idx = list(range(15, 24))
-        else:
-            tpcf_idx = list(range(24))
-            
-        tpcfs_train = D.tpcfs_train[:, tpcf_idx]
-        tpcfs_val = D.tpcfs_val[:, tpcf_idx]
-        tpcfs_test = D.tpcfs_test[:, tpcf_idx]
-        
-        graph = build_graph(halo_train[:2], 
-                            tpcfs_train[:2], 
-                            k=K, 
-                            use_pbc=use_pbc, 
-                            use_edges=use_edges, 
-                            use_rbf=use_rbf, 
-                            mean=mean, 
-                            std=std)
-    else:
-        tpcfs_train = None
-        tpcfs_val = None
-        tpcfs_test = None
-        
-        graph = build_graph(halo_train[:2], 
-                            None, 
-                            k=K, 
-                            use_pbc=use_pbc, 
-                            use_edges=use_edges, 
-                            use_rbf=use_rbf, 
-                            mean=mean, 
-                            std=std)
-        
+    tpcfs_train = None
+    tpcfs_val = None
+    tpcfs_test = None
+    
     # Split eval batches across devices
     num_local_devices = jax.local_device_count()
     halo_val, omega_m_val, tpcfs_val = split_batches(num_local_devices, halo_val, omega_m_val, tpcfs_val)
@@ -290,6 +284,15 @@ def run_expt(model_name,
 
     if get_node_reps:
         param_dict['get_node_reps'] = True
+
+    graph = build_graph(halo_train[:2], 
+                        None, 
+                        k=K, 
+                        use_pbc=use_pbc, 
+                        use_edges=use_edges, 
+                        use_rbf=use_rbf, 
+                        mean=mean, 
+                        std=std)
     
     model = GraphWrapper(model_name, param_dict, norm_dict)
     key = jax.random.PRNGKey(0)
@@ -309,35 +312,33 @@ def run_expt(model_name,
     best_val = 1e10
     with trange(n_steps, ncols=100) as steps:
         for step in steps:
-            key, subkey = jax.random.split(key)
-            idx = jax.random.choice(key, num_train_sims, shape=(n_batch,))
-
-            halo_batch = halo_train[:n_train][idx]
-            omega_m_batch = omega_m_train[:n_train][idx]
-            if use_tpcf != 'none':
-                tpcfs_batch = tpcfs_train[idx]
-            else:
+            train_iter = iter(train_dataset)
+            running_train_loss = 0.0
+            for _ in range(n_train // n_batch):
+                halo_batch, omega_m_batch = next(train_iter)
+                halo_batch, omega_m_batch = halo_batch.numpy(), omega_m_batch.numpy()
                 tpcfs_batch = None
             
-            # Split batches across devices
-            halo_batch, omega_m_batch, tpcfs_batch = split_batches(num_local_devices, halo_batch, omega_m_batch, tpcfs_batch)
-            pstate, metrics = train_step(pstate, halo_batch, omega_m_batch, tpcfs_batch)
-            train_loss = unreplicate(metrics["loss"])
+                # Split batches across devices
+                halo_batch, omega_m_batch, tpcfs_batch = split_batches(num_local_devices, halo_batch, omega_m_batch, tpcfs_batch)
+                pstate, metrics = train_step(pstate, halo_batch, omega_m_batch, tpcfs_batch)
+                train_loss = unreplicate(metrics["loss"])
+                running_train_loss += train_loss
+            avg_train_loss = running_train_loss/(n_train // n_batch)
             
-            if step % eval_every == 0:
-                outputs, val_metrics = eval_step(pstate, halo_val, omega_m_val, tpcfs_val)
-                val_loss = unreplicate(val_metrics["loss"])
+            outputs, val_metrics = eval_step(pstate, halo_val, omega_m_val, tpcfs_val)
+            val_loss = unreplicate(val_metrics["loss"])
+
+            if val_loss < best_val:
+                best_val = val_loss
+                tag = " (best)"
+
+                outputs, test_metrics = eval_step(pstate, halo_test, omega_m_test, tpcfs_test)
+                test_loss_ckp = unreplicate(test_metrics["loss"])
+            else:
+                tag = ""
             
-                if val_loss < best_val:
-                    best_val = val_loss
-                    tag = " (best)"
-                    
-                    outputs, test_metrics = eval_step(pstate, halo_test, omega_m_test, tpcfs_test)
-                    test_loss_ckp = unreplicate(test_metrics["loss"])
-                else:
-                    tag = ""
-            
-            steps.set_postfix_str('loss: {:.5f}, val_loss: {:.5f}, ckp_test_loss: {:.5F}'.format(train_loss,
+            steps.set_postfix_str('avg loss: {:.5f}, val_loss: {:.5f}, ckp_test_loss: {:.5F}'.format(avg_train_loss,
                                                                                                    val_loss,
                                                                                                    test_loss_ckp))
             losses.append(train_loss)
@@ -376,7 +377,6 @@ def main(model, feats, lr, decay, steps, batch_size, use_rbf, use_tpcf, k):
                                         "n_layers": 2, 
                                         "message_passing_steps":2, 
                                         "task": 'node'}
-        DIFFPOOL_PARAMS['d_hidden'] = DIFFPOOL_PARAMS['gnn_kwargs']['d_hidden']
         params = DIFFPOOL_PARAMS
     else:
         raise NotImplementedError

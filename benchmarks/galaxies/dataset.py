@@ -37,7 +37,8 @@ class GalaxyDataset:
                 tpcfs_val = np.load(tpcf_dir / 'tpcfs_val.npy')
                 tpcfs_test = np.load(tpcf_dir / 'tpcfs_test.npy')
 
-            self.tpcfs_train, self.tpcfs_val, self.tpcfs_test = self.normalize(tpcfs_train, tpcfs_val, tpcfs_test)
+            self.tpcfs_train, self.tpcfs_val, self.tpcfs_test = tpcfs_train, tpcfs_val, tpcfs_test
+            # self.tpcfs_train, self.tpcfs_val, self.tpcfs_test = self.normalize(tpcfs_train, tpcfs_val, tpcfs_test)
 
         self.omega_m_train, self.omega_m_val, self.omega_m_test = self.load_labels(data_dir)
 
@@ -74,7 +75,7 @@ class GalaxyDataset:
     def normalize(self, feats_train, feats_val, feats_test, eps=1e-8) -> Tuple[np.ndarray, ...]:
         feats_mean = feats_train.mean((0,1))
         feats_std = feats_train.std((0,1))
-        
+    
         feats_train = (feats_train - feats_mean) / (feats_std + eps)
         feats_val = (feats_val - feats_mean) / (feats_std + eps)
         feats_test = (feats_test - feats_mean) / (feats_std + eps)
