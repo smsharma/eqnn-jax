@@ -136,7 +136,7 @@ class SEGNN(nn.Module):
     use_vel_attrs: bool = False  # Use velocity as steerable attribute
     normalize_messages: bool = True  # Normalize messages by number of edges
     num_message_passing_steps: int = 3  # Number of message passing steps
-    num_blocks: int = 3  # Number of gated tensor products in each message passing step
+    num_blocks: int = 2  # Number of gated tensor products in each message passing step
     residual: bool = True  # Residual connections
     use_pbc: bool = (
         False  # Use periodic boundary conditions when computing relative position vectors
