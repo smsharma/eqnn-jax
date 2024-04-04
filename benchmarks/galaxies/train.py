@@ -34,7 +34,7 @@ from models.egnn import EGNN
 from models.segnn import SEGNN
 from models.diffpool import DiffPool
 
-from benchmarks.galaxies.dynamic_dataset import GalaxyDataset
+from benchmarks.galaxies.dataset import GalaxyDataset
 
 
 GNN_PARAMS = {
