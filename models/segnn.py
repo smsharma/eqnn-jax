@@ -150,9 +150,9 @@ def wrap_graph_tuple(graph):
 class SEGNN(nn.Module):
     d_hidden: int = 64  # Hidden dimension
     l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
-    output_irreps: Optional[
-        Irreps
-    ] = None  # Output irreps for node-wise task; defaults to input irreps
+    output_irreps: Optional[Irreps] = (
+        None  # Output irreps for node-wise task; defaults to input irreps
+    )
     hidden_irreps: Optional[Irreps] = None
     normalize_messages: bool = True  # Normalize messages by number of edges
     num_message_passing_steps: int = 3  # Number of message passing steps
@@ -162,7 +162,9 @@ class SEGNN(nn.Module):
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
-    intermediate_hidden_irreps: bool = True  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
+    intermediate_hidden_irreps: bool = (
+        True  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
+    )
     scalar_activation: str = "silu"  # Activation function for scalars
     gate_activation: str = "sigmoid"  # Activation function for gate scalars
     n_outputs: int = 1
@@ -326,13 +328,13 @@ class SEGNN(nn.Module):
                 steerable_node_attrs=steerable_node_attrs,
             )
             # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
-#             irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
-#             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-#             nodes_pre_pool = nn.Dense(self.d_hidden)(TensorProductLinearGate(irreps_pre_pool, activation=False)(graphs.nodes, steerable_node_attrs).array)
-#             agg_nodes = readout_agg_fn(nodes_pre_pool, axis=0)
+        #             irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
+        #             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
+        #             nodes_pre_pool = nn.Dense(self.d_hidden)(TensorProductLinearGate(irreps_pre_pool, activation=False)(graphs.nodes, steerable_node_attrs).array)
+        #             agg_nodes = readout_agg_fn(nodes_pre_pool, axis=0)
 
-#             # Readout and return
-#             out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
-#             return out
+        #             # Readout and return
+        #             out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
+        #             return out
         else:
             raise ValueError(f"Invalid task {self.task}")
