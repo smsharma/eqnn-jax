@@ -48,6 +48,7 @@ def get_equivariant_graph(
     x_j = positions[jnp.arange(positions.shape[0])[:, None], receivers, :]
     if periodic_boundaries:
         std = norm_dict["std"][None, :3][0]
+        print(std)
         x_i = x_i.array + std
         x_j = x_j.array + std
         r_ij = x_i - x_j
@@ -60,6 +61,7 @@ def get_equivariant_graph(
         # print(cell)
 
         r_ij = apply_pbc(r_ij, cell)
+        print(r_ij)
         # print('r_ij after pbc:')
         # print(r_ij)
     else:
