@@ -1,4 +1,4 @@
-from typing import Any, NamedTuple, Iterable, Mapping, Union, Optional
+from typing import Any, NamedTuple, Iterable, Mapping, Union, Optional, Callable
 
 import e3nn_jax as e3nn
 from e3nn_jax import IrrepsArray
@@ -6,7 +6,7 @@ from e3nn_jax import IrrepsArray
 import jax
 from jraph import segment_mean
 import jax.numpy as jnp
-from .graph_utils import apply_pbc
+from .graph_utils import get_apply_pbc
 
 ArrayTree = Union[jnp.ndarray, Iterable["ArrayTree"], Mapping[Any, "ArrayTree"]]
 
@@ -38,30 +38,14 @@ def get_equivariant_graph(
     additional_messages: Optional[jnp.ndarray] = None,
     steerable_velocities: bool = False,
     spherical_harmonics_norm="integral",
-    periodic_boundaries: bool = False,
-    norm_dict=None,
-    unit_cell=None,
-    boxsize=1000.0,
+    apply_pbc: Optional[Callable] = None,
 ):
     attribute_irreps = e3nn.Irreps.spherical_harmonics(lmax_attributes)
     x_i = positions[jnp.arange(positions.shape[0])[:, None], senders, :]
     x_j = positions[jnp.arange(positions.shape[0])[:, None], receivers, :]
-    if periodic_boundaries:
-        std = norm_dict["std"][None, :3][0]
-        x_i = x_i.array + std
-        x_j = x_j.array + std
-        r_ij = x_i - x_j
-
-        cell = jnp.diag(boxsize / std)
-        # print('r_ij:')
-        # print(r_ij)
-        # print()
-        # print('cell:')
-        # print(cell)
-
-        r_ij = apply_pbc(r_ij, cell)
-        # print('r_ij after pbc:')
-        # print(r_ij)
+    if apply_pbc is not None:
+        r_ij = x_i.array - x_j.array
+        r_ij = apply_pbc(r_ij,)
     else:
         r_ij = (x_i - x_j).array
     # print(r_ij)
