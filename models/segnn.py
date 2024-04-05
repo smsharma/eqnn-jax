@@ -322,19 +322,25 @@ class SEGNN(nn.Module):
                 raise ValueError(
                     f"Invalid global aggregation function {self.message_passing_agg}"
                 )
-            return self._decode_graph(
-                hidden_irreps=irreps_intermediate,
-                graph=graphs,
-                steerable_node_attrs=steerable_node_attrs,
-            )
+            # return self._decode_graph(
+            #     hidden_irreps=irreps_intermediate,
+            #     graph=graphs,
+            #     steerable_node_attrs=steerable_node_attrs,
+            # )
             # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
-        #             irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
-        #             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-        #             nodes_pre_pool = nn.Dense(self.d_hidden)(TensorProductLinearGate(irreps_pre_pool, activation=False)(graphs.nodes, steerable_node_attrs).array)
-        #             agg_nodes = readout_agg_fn(nodes_pre_pool, axis=0)
+            irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
+            readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
+            nodes_pre_pool = nn.Dense(self.d_hidden)(
+                TensorProductLinearGate(irreps_pre_pool, activation=False)(
+                    graphs.nodes, steerable_node_attrs
+                ).array
+            )
+            agg_nodes = readout_agg_fn(nodes_pre_pool, axis=0)
 
-        #             # Readout and return
-        #             out = MLP([w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs])(agg_nodes)
-        #             return out
+            # Readout and return
+            out = MLP(
+                [w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs]
+            )(agg_nodes)
+            return out
         else:
             raise ValueError(f"Invalid task {self.task}")
