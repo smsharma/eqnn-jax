@@ -34,7 +34,7 @@ from models.egnn import EGNN
 from models.segnn import SEGNN
 from models.diffpool import DiffPool
 
-from benchmarks.galaxies.dynamic_dataset import GalaxyDataset
+from benchmarks.galaxies.dataset import GalaxyDataset
 
 
 GNN_PARAMS = {
@@ -49,7 +49,7 @@ GNN_PARAMS = {
         'readout_only_positions': False,
         'task': 'graph',
         'mlp_readout_widths': [8, 2, 2],
-        'norm': 'layer'
+        'norm': 'layer',
     } 
 
 EGNN_PARAMS = {
@@ -160,7 +160,7 @@ def loss_mse(pred_batch, cosmo_batch):
 
 @partial(jax.pmap, axis_name="batch",)
 def train_step(state, halo_batch, omega_m_batch, tpcfs_batch):
-    halo_graph = build_graph(halo_batch, tpcfs_batch, k=K, use_pbc=True, use_edges=True, use_rbf=True)
+    halo_graph = build_graph(halo_batch, tpcfs_batch, k=K, use_pbc=True, use_edges=False)
     
     def loss_fn(params):
         outputs = state.apply_fn(params, halo_graph)
@@ -183,7 +183,7 @@ def train_step(state, halo_batch, omega_m_batch, tpcfs_batch):
 @partial(jax.pmap, axis_name="batch",)
 def eval_step(state, halo_batch, omega_m_batch, tpcfs_batch):
     # Build graph
-    halo_graph = build_graph(halo_batch, tpcfs_batch, k=K, use_pbc=True, use_edges=True, use_rbf=True)
+    halo_graph = build_graph(halo_batch, tpcfs_batch, k=K, use_pbc=True, use_edges=False)
     
     outputs = state.apply_fn(state.params, halo_graph)
     if len(outputs.shape) > 2:
@@ -210,7 +210,7 @@ def run_expt(model_name,
              param_dict, 
              data_dir,
              use_pbc = True, 
-             use_edges = True, 
+             use_edges = False, 
              use_rbf = False,
              use_tpcf = 'none',
              n_steps = 1000,
@@ -226,7 +226,8 @@ def run_expt(model_name,
     # Create experiment directory
     experiments_base_dir = Path(__file__).parent / 'experiments/'
     d_hidden = param_dict['d_hidden']
-    experiment_id = f'{model_name}_{feats}_{n_batch}_{n_steps}_{d_hidden}_{K}_' + \
+    hops = param_dict['message_passing_steps']
+    experiment_id = f'{model_name}_{feats}_{n_batch}_{n_steps}_{hops}h_{d_hidden}d_{K}_' + \
                     use_tpcf + \
                     '_rbf'*use_rbf 
     
@@ -377,6 +378,7 @@ def main(model, feats, lr, decay, steps, batch_size, use_rbf, use_tpcf, k):
                                         "message_passing_steps":2, 
                                         "task": 'node'}
         DIFFPOOL_PARAMS['d_hidden'] = DIFFPOOL_PARAMS['gnn_kwargs']['d_hidden']
+        DIFFPOOL_PARAMS['message_passing_steps'] = DIFFPOOL_PARAMS['gnn_kwargs']['message_passing_steps']
         params = DIFFPOOL_PARAMS
     else:
         raise NotImplementedError
