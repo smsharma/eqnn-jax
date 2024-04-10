@@ -33,7 +33,7 @@ def create_dummy_graph(
     k,
     use_irreps=False,
 ):
-    sources, targets = jax.vmap(nearest_neighbors, in_axes=(0, None))(
+    sources, targets, d = jax.vmap(nearest_neighbors, in_axes=(0, None))(
         node_features[..., :3], k
     )
     n_node = np.array([len(node_feat) for node_feat in node_features])
@@ -136,9 +136,6 @@ def is_model_invariant(
     )
     output_original = model.apply(params, data)
     output_transformed = model.apply(params, transformed_data)
-    if use_irreps:
-        output_original = output_original.array
-        output_transformed = output_transformed.array
     # Make sure output original sufficiently different from output transformed
     if should_be_invariant:
         assert np.allclose(output_original, output_transformed, rtol=rtol)

@@ -7,7 +7,6 @@ sys.path.append("../")
 
 import pytest
 from utils.graph_utils import get_apply_pbc, build_graph 
-from utils.equivariant_graph_utils import get_equivariant_graph
 
 def test__apply_pbcs_on_graph():
     # Test that graph standarized and not standarized agrees
