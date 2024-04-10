@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import jraph
 from jraph._src import utils
 
-from utils.graph_utils import fourier_features
+from models.utils.graph_utils import fourier_features
 from models.mlp import MLP
 
 
@@ -329,6 +329,9 @@ class EGNN(nn.Module):
                 agg_nodes = readout_agg_fn(processed_graphs.nodes[:, :3], axis=0)
             else:
                 agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
+                
+            if processed_graphs.globals is not None:
+                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
 
             # Readout and return
             out = MLP(

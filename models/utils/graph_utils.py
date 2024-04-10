@@ -2,12 +2,13 @@ import jax
 import jax.numpy as np
 import jraph
 
+from typing import Callable, Optional
 from functools import partial
 
+EPS = 1e-7
 
-def apply_pbc(
-    dr: np.array,
-    cell: np.array = np.array(
+
+def get_apply_pbc(std: np.array=None, cell: np.array = np.array(
         [
             [
                 1.0,
@@ -18,57 +19,96 @@ def apply_pbc(
             [0.0, 0.0, 1.0],
         ]
     ),
-) -> np.array:
-    """Apply periodic boundary conditions to a displacement vector, dr, given a cell.
+):
+    if std is not None:
+        cell = cell / std[:3]
 
-    Args:
-        dr (np.array): An array of shape (N,3) containing the displacement vector
-        cell_matrix (np.array): A 3x3 matrix describing the box dimensions and orientation.
+    def apply_pbc(
+        dr: np.array,
+    ) -> np.array:
+        """Apply periodic boundary conditions to a displacement vector, dr, given a cell.
 
-    Returns:
-        np.array: displacement vector with periodic boundary conditions applied
-    """
-    return dr - np.round(dr.dot(np.linalg.inv(cell))).dot(cell)
+        Args:
+            dr (np.array): An array of shape (N,3) containing the displacement vector
+            cell_matrix (np.array): A 3x3 matrix describing the box dimensions and orientation.
+
+        Returns:
+            np.array: displacement vector with periodic boundary conditions applied
+        """
+        return (dr - np.round(dr.dot(np.linalg.inv(cell))).dot(cell)) 
+    return apply_pbc
 
 
-@partial(jax.jit, static_argnums=(1,))
+@partial(jax.jit, static_argnums=(1,2))
 def nearest_neighbors(
     x: np.array,
     k: int,
-    mask: np.array = None,
+    apply_pbc: Optional[Callable] = None,
 ):
     """Returns the nearest neighbors of each node in x.
 
     Args:
-        x (np.array): positions of nodes
+        x (jnp.array): positions of nodes
         k (int): number of nearest neighbors to find
-        boxsize (float, optional): size of box if perdioc boundary conditions. Defaults to None.
-        unit_cell (np.array, optional): unit cell for applying periodic boundary conditions. Defaults to None.
-        mask (np.array, optional): node mask. Defaults to None.
+        unit_cell (jnp.array, optional): unit cell for applying periodic boundary conditions. Defaults to None.
+        mask (jnp.array, optional): node mask. Defaults to None.
 
     Returns:
-        sources, targets: pairs of neighbors
+        sources, targets, distances: pairs of neighbors and their distances
     """
-    if mask is None:
-        mask = np.ones((x.shape[0],), dtype=np.int32)
-
     n_nodes = x.shape[0]
-
     # Compute the vector difference between positions
-    dr = x[:, None, :] - x[None, :, :]
-
+    dr = (x[:, None, :] - x[None, :, :]) + EPS
+    if apply_pbc is not None:
+        dr = apply_pbc(dr)
     # Calculate the distance matrix
     distance_matrix = np.sum(dr**2, axis=-1)
-
-    distance_matrix = np.where(mask[:, None], distance_matrix, np.inf)
-    distance_matrix = np.where(mask[None, :], distance_matrix, np.inf)
-
+    # Get indices of nearest neighbors
     indices = np.argsort(distance_matrix, axis=-1)[:, :k]
 
-    sources = indices[:, 0].repeat(k)
-    targets = indices.reshape(n_nodes * (k))
+    # Create sources and targets arrays
+    sources = np.repeat(np.arange(n_nodes), k)
+    targets = indices.ravel()
+    return sources, targets, dr[sources, targets]
 
-    return (sources, targets)
+
+def build_graph(
+    halos,
+    tpcfs,
+    k,
+    use_edges=True,
+    apply_pbc: Optional[Callable] = None,
+    use_rbf=False,
+    sigma_num=8,
+):
+
+    n_batch = len(halos)
+
+    sources, targets, distances = jax.vmap(
+        partial(nearest_neighbors), in_axes=(0, None, None)
+    )(halos[..., :3], k, apply_pbc,)
+
+    if use_edges:
+        edges = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
+        if use_rbf:
+            min_sigma = np.min(edges)
+            max_sigma = np.mean(edges)
+            sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num)
+            edges = [np.exp(-(edges**2) / (2 * sigma**2)) for sigma in sigma_vals]
+            edges = np.concatenate(edges, axis=-1)
+    else:
+        edges = None
+
+
+    return jraph.GraphsTuple(
+        n_node=np.array([[halos.shape[1]]] * n_batch),
+        n_edge=np.array(n_batch * [[k]]),
+        nodes=halos,
+        edges=edges,
+        globals=tpcfs,
+        senders=sources,
+        receivers=targets,
+    )
 
 
 def add_graphs_tuples(
