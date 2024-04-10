@@ -95,6 +95,7 @@ class ChargedDataset(BaseDataset):
         n_bodies=5,
         normalize=False,
         data_dir="data",
+        global_task=False,
     ):
         super().__init__(
             "charged",
@@ -106,6 +107,7 @@ class ChargedDataset(BaseDataset):
             data_dir=data_dir,
         )
         self.data, self.edges = self.load()
+        self.global_task = global_task
 
     def preprocess(self, *args) -> Tuple[np.ndarray, ...]:
         # swap n_nodes - n_features dimensions
@@ -143,6 +145,16 @@ class ChargedDataset(BaseDataset):
         loc, vel, edge_attr, edges, charges = self.preprocess(loc, vel, edges, q)
         return (loc, vel, edge_attr, charges), edges
 
+    def compute_global(self, loc, vel, charges):
+        vel_diff = vel[:, :, jnp.newaxis, :] - vel[:, jnp.newaxis, :, :]
+        loc_diff = loc[:, :, jnp.newaxis, :] - loc[:, jnp.newaxis, :, :]
+        distances = jnp.sqrt(jnp.sum(loc_diff ** 2, axis=-1))
+        num_nodes = loc.shape[1]
+        mask = ~jnp.eye(num_nodes, dtype=bool)
+        avg_distances = jnp.where(mask, distances, 0).sum(axis=2) / (num_nodes - 1)
+        avg_vel_diffs = jnp.where(mask[:, :, jnp.newaxis], vel_diff, 0).sum(axis=2) / (num_nodes - 1)
+        return 1./num_nodes*jnp.sum(1./avg_distances[...,None]**2 * charges * avg_vel_diffs,  axis=1)
+
     def __getitem__(self, i: Union[Sequence, int]) -> Tuple[np.ndarray, ...]:
         frame_0, frame_target = self._get_partition_frames()
         loc, vel, edge_attr, charges = self.data
@@ -153,7 +165,11 @@ class ChargedDataset(BaseDataset):
             charges[i],
             loc[i, frame_target],
         )
-        return loc, vel, edge_attr, charges, target_loc
+        if not self.global_task:
+            return loc, vel, edge_attr, charges, target_loc
+        else:
+            global_target = self.compute_global(loc, vel, charges) #jnp.sum(jnp.sum(charges,axis=-1),axis=-1)[:,None]
+            return loc, vel, edge_attr, charges, global_target 
 
 
 def NbodyGraphTransform(
@@ -161,6 +177,7 @@ def NbodyGraphTransform(
     n_nodes: int,
     batch_size: int,
     lmax_attributes: int,
+    global_task: bool = False,
 ) -> Callable:
     """
     Build a function that converts torch DataBatch into SteerableGraphsTuple.
@@ -177,7 +194,8 @@ def NbodyGraphTransform(
         _ = training
         loc, vel, _, q, targets = data
         # substract center of the system:
-        targets = targets - loc
+        if not global_task:
+            targets = targets - loc
         loc = loc - loc.mean(axis=1, keepdims=True)
         senders, receivers = full_edge_indices[:, :, 0], full_edge_indices[:, :, 1]
         vel_modulus = jnp.linalg.norm(vel, axis=-1, keepdims=True)
@@ -216,7 +234,7 @@ def NonSteerableNbodyGraphTransform(
     dataset_name: str,
     n_nodes: int,
     batch_size: int,
-    lmax_attributes: int,
+    global_task: bool = False,
 ) -> Callable:
     """
     Build a function that converts torch DataBatch into SteerableGraphsTuple.
@@ -233,7 +251,8 @@ def NonSteerableNbodyGraphTransform(
         _ = training
         loc, vel, _, q, targets = data
         # substract center of the system:
-        targets = targets - loc
+        if not global_task:
+            targets = targets - loc
         loc = loc - loc.mean(axis=1, keepdims=True)
         senders, receivers = full_edge_indices[:, :, 0], full_edge_indices[:, :, 1]
         vel_modulus = jnp.linalg.norm(vel, axis=-1, keepdims=True)
@@ -275,6 +294,7 @@ def setup_nbody_data(
     n_bodies=5,
     batch_size=100,
     steerable: bool = True,
+    task: str = 'node',
 ):
     if dataset == "charged":
         dataset_train = ChargedDataset(
@@ -282,16 +302,19 @@ def setup_nbody_data(
             dataset_name=dataset_name,
             max_samples=max_samples,
             n_bodies=n_bodies,
+            global_task=True if task == 'graph' else False,
         )
         dataset_val = ChargedDataset(
             partition="val",
             dataset_name=dataset_name,
             n_bodies=n_bodies,
+            global_task=True if task == 'graph' else False,
         )
         dataset_test = ChargedDataset(
             partition="test",
             dataset_name=dataset_name,
             n_bodies=n_bodies,
+            global_task=True if task == 'graph' else False,
         )
     if steerable:
         graph_transform = NbodyGraphTransform(
@@ -299,13 +322,14 @@ def setup_nbody_data(
             batch_size=batch_size,
             dataset_name=dataset,
             lmax_attributes=lmax_attributes,
+            global_task=True if task == 'graph' else False,
         )
     else:
         graph_transform = NonSteerableNbodyGraphTransform(
             n_nodes=n_bodies,
             batch_size=batch_size,
             dataset_name=dataset,
-            lmax_attributes=lmax_attributes,
+            global_task=True if task == 'graph' else False,
         )
     loader_train = jdl.DataLoader(
         dataset_train,
