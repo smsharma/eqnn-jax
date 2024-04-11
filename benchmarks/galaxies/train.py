@@ -42,7 +42,6 @@ MLP_PARAMS = {
     "feature_sizes": [128, 128, 128, 1],
 }
 
-
 GNN_PARAMS = {
     "n_outputs": 1,
     "message_passing_steps": 2,
@@ -84,9 +83,6 @@ DIFFPOOL_PARAMS = {
     "gnn_kwargs": GNN_PARAMS,
     "combine_hierarchies_method": "mean",
     "use_edge_features": True,
-    "task": "graph",
-    "mlp_readout_widths": [8, 2, 2],
-}
     "task": "graph",
     "mlp_readout_widths": [8, 2, 2],
 }
