@@ -95,7 +95,6 @@ class GNN(nn.Module):
     d_output: Optional[int] = None
     n_layers: int = 3
     activation: str = "gelu"
-
     message_passing_agg: str = "sum"  # "sum", "mean", "max"
     readout_agg: str = "mean"
     mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs

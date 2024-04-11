@@ -5,37 +5,41 @@ import jax
 import jraph
 from typing import Callable, List, Optional, Tuple, Sequence, Union, NamedTuple
 from tqdm.notebook import tqdm
-from pycorr import TwoPointCorrelationFunction # Can install it here https://github.com/cosmodesi/pycorr
+from pycorr import (
+    TwoPointCorrelationFunction,
+)  # Can install it here https://github.com/cosmodesi/pycorr
 
 
 class GalaxyDataset:
     """Dark matter halo dataset class."""
+
     def __init__(
         self,
         data_dir,
-        use_pos = True,
-        use_vel = False,
-        use_mass = False,
-        use_tpcf = 'none',
+        use_pos=True,
+        use_vel=False,
+        use_mass=False,
+        use_tpcf="none",
     ):
-    
-        self.data_dir = data_dir
-        halos_train, halos_val, halos_test =  self.load_node_feats(data_dir, 
-                                                                  use_pos, 
-                                                                  use_vel, 
-                                                                  use_mass)
-        self.halos_train, self.halos_val, self.halos_test = self.normalize(halos_train, halos_val, halos_test)
 
-        if use_tpcf != 'none':
-            tpcf_dir = Path(__file__).parent / 'tpcfs/'
+        self.data_dir = data_dir
+        halos_train, halos_val, halos_test = self.load_node_feats(
+            data_dir, use_pos, use_vel, use_mass
+        )
+        self.halos_train, self.halos_val, self.halos_test = self.normalize(
+            halos_train, halos_val, halos_test
+        )
+
+        if use_tpcf != "none":
+            tpcf_dir = Path(__file__).parent / "tpcfs/"
             if not tpcf_dir.is_dir():
-                tpcfs_train = self.generate_tpcfs(self, halos_train, data_str='train')
-                tpcfs_val = self.generate_tpcfs(self, halos_val, data_str='val')
-                tpcfs_test = self.generate_tpcfs(self, halos_test, data_str='test')
+                tpcfs_train = self.generate_tpcfs(self, halos_train, data_str="train")
+                tpcfs_val = self.generate_tpcfs(self, halos_val, data_str="val")
+                tpcfs_test = self.generate_tpcfs(self, halos_test, data_str="test")
             else:
-                tpcfs_train = np.load(tpcf_dir / 'tpcfs_train.npy')
-                tpcfs_val = np.load(tpcf_dir / 'tpcfs_val.npy')
-                tpcfs_test = np.load(tpcf_dir / 'tpcfs_test.npy')
+                tpcfs_train = np.load(tpcf_dir / "tpcfs_train.npy")
+                tpcfs_val = np.load(tpcf_dir / "tpcfs_val.npy")
+                tpcfs_test = np.load(tpcf_dir / "tpcfs_test.npy")
 
             if use_tpcf == "small":
                 tpcf_idx = list(range(8))
@@ -69,17 +73,16 @@ class GalaxyDataset:
         self.halos_std = halos_train.std((0,1))
         
         return halos_train, halos_val, halos_test
-    
-    
+
     def load_labels(self, data_dir) -> Tuple[np.ndarray, ...]:
-        cosmology_train = pd.read_csv(data_dir / f'train_cosmology.csv')
-        cosmology_val= pd.read_csv(data_dir / f'val_cosmology.csv')
-        cosmology_test = pd.read_csv(data_dir / f'test_cosmology.csv')
-        
-        omega_m_train = np.array(cosmology_train['Omega_m'].values)[:,None]
-        omega_m_val = np.array(cosmology_val['Omega_m'].values)[:,None]
-        omega_m_test = np.array(cosmology_test['Omega_m'].values)[:,None]
-        
+        cosmology_train = pd.read_csv(data_dir / f"train_cosmology.csv")
+        cosmology_val = pd.read_csv(data_dir / f"val_cosmology.csv")
+        cosmology_test = pd.read_csv(data_dir / f"test_cosmology.csv")
+
+        omega_m_train = np.array(cosmology_train["Omega_m"].values)[:, None]
+        omega_m_val = np.array(cosmology_val["Omega_m"].values)[:, None]
+        omega_m_test = np.array(cosmology_test["Omega_m"].values)[:, None]
+
         return omega_m_train, omega_m_val, omega_m_test
         
     
@@ -93,33 +96,26 @@ class GalaxyDataset:
         feats_test = (feats_test - feats_mean) / (feats_std + eps)
 
         return feats_train, feats_val, feats_test
-    
-    
-    def generate_tpcfs(self, halos, data_str='train'):
+
+    def generate_tpcfs(self, halos, data_str="train"):
         r_bins = np.linspace(0.5, 150.0, 25)
-        r_c = 0.5*(r_bins[1:] + r_bins[:-1])
-        
+        r_c = 0.5 * (r_bins[1:] + r_bins[:-1])
+
         mu_bins = np.linspace(-1, 1, 201)
-        box_size = 1000.
+        box_size = 1000.0
 
         tpcfs = []
         for halo in halos:
             tpcfs.append(
                 TwoPointCorrelationFunction(
-                        "smu",
-                        edges=(np.array(r_bins), np.array(mu_bins)),
-                        data_positions1=np.array(halo[:,:3]).T,
-                        engine="corrfunc",
-                        n_threads=2,
-                        boxsize=box_size,
-                        los="z",
-                    )(ells=[0])[0]
+                    "smu",
+                    edges=(np.array(r_bins), np.array(mu_bins)),
+                    data_positions1=np.array(halo[:, :3]).T,
+                    engine="corrfunc",
+                    n_threads=2,
+                    boxsize=box_size,
+                    los="z",
+                )(ells=[0])[0]
             )
         tpcfs = np.stack(tpcfs)
-        np.save(f'tpcfs_{data_str}.npy', tpcfs)
-    
-
-        
-    
-        
-    
+        np.save(f"tpcfs_{data_str}.npy", tpcfs)

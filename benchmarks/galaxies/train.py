@@ -87,6 +87,9 @@ DIFFPOOL_PARAMS = {
     "task": "graph",
     "mlp_readout_widths": [8, 2, 2],
 }
+    "task": "graph",
+    "mlp_readout_widths": [8, 2, 2],
+}
 
 
 SEGNN_PARAMS = {
@@ -97,10 +100,11 @@ SEGNN_PARAMS = {
     "intermediate_hidden_irreps": True,
     "task": "graph",
     "output_irreps": e3nn.Irreps("1x0e"),
-    "hidden_irreps": weight_balanced_irreps(lmax=1,
-                                            scalar_units=64,
-                                            irreps_right=e3nn.Irreps.spherical_harmonics(1),
-                                            ),
+    "hidden_irreps": weight_balanced_irreps(
+        lmax=1,
+        scalar_units=64,
+        irreps_right=e3nn.Irreps.spherical_harmonics(1),
+    ),
     "normalize_messages": True,
     "message_passing_agg": "mean",
     "readout_agg": "mean",
