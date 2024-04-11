@@ -26,11 +26,11 @@ class DiffPool(nn.Module):
     use_edge_features: bool = False  # Whether to use edge features in adjacency matrix
     mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
     d_hidden: int = 64
+    message_passing_steps: int = 2
     n_outputs: int = 1  # Number of outputs for graph-level readout
 
     @nn.compact
-    def __call__(self, x):
-        
+    def __call__(self, x): 
         # If graph prediction task, collect pooled embeddings at each hierarchy level
         if self.task == "graph":
             x_pool = jnp.zeros((self.n_downsamples, self.gnn_kwargs['d_output']))
@@ -85,7 +85,7 @@ class DiffPool(nn.Module):
                 edges=a[sources, targets][..., None],
                 senders=sources,
                 receivers=targets,
-                globals=None,
+                globals=z.globals,
                 n_node=n_nodes_downsampled,
                 n_edge=self.k,
             )
@@ -102,7 +102,18 @@ class DiffPool(nn.Module):
             else:
                 raise ValueError(f"Unknown combine_hierarchies_method: {self.combine_hierarchies_method}")
             
-            mlp = MLP([self.mlp_readout_widths[0] * x_pool.shape[-1]] + [w * self.d_hidden for w in self.mlp_readout_widths[1:]] + [self.n_outputs,])                                                         
+            if x.globals is not None:
+                x_pool = jnp.concatenate([x_pool, processed_graphs.globals]) #use tpcf
+                
+                norm = nn.LayerNorm()
+                x_pool = norm(x_pool)
+                
+            # Readout and return
+            mlp = MLP([
+                self.mlp_readout_widths[0] * x_pool.shape[-1]] + \
+                [w * self.d_hidden for w in self.mlp_readout_widths[1:]] + \
+                [self.n_outputs,]
+            )                                                                        
             out = mlp(x_pool)                                                             
             return out
         

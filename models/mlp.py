@@ -11,6 +11,7 @@ class MLP(nn.Module):
     feature_sizes: Sequence[int]
     activation: Callable[[np.array], np.array] = nn.gelu
     activate_final: bool = False
+    d_hidden: int = None
 
     @nn.compact
     def __call__(self, x):

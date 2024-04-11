@@ -7,14 +7,9 @@ from functools import partial
 
 EPS = 1e-7
 
-
 def get_apply_pbc(std: np.array=None, cell: np.array = np.array(
         [
-            [
-                1.0,
-                0.0,
-                0.0,
-            ],
+            [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ]
@@ -22,6 +17,7 @@ def get_apply_pbc(std: np.array=None, cell: np.array = np.array(
 ):
     if std is not None:
         cell = cell / std[:3]
+        cell -= 0.5 / std[:3]
 
     def apply_pbc(
         dr: np.array,
@@ -79,9 +75,8 @@ def build_graph(
     use_edges=True,
     apply_pbc: Optional[Callable] = None,
     use_rbf=False,
-    sigma_num=8,
+    sigma_num=16,
 ):
-
     n_batch = len(halos)
 
     sources, targets, distances = jax.vmap(
@@ -98,7 +93,6 @@ def build_graph(
             edges = np.concatenate(edges, axis=-1)
     else:
         edges = None
-
 
     return jraph.GraphsTuple(
         n_node=np.array([[halos.shape[1]]] * n_batch),

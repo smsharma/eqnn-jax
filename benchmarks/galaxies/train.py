@@ -6,7 +6,7 @@ import optax
 from tqdm import trange, tqdm
 from time import sleep
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Callable
 import dataclasses
 
 import argparse
@@ -24,7 +24,7 @@ import sys
 
 sys.path.append("../../")
 
-from models.utils.graph_utils import build_graph
+from models.utils.graph_utils import build_graph, get_apply_pbc
 from models.utils.irreps_utils import weight_balanced_irreps
 from models.utils.equivariant_graph_utils import get_equivariant_graph
 
@@ -38,6 +38,9 @@ from models.diffpool import DiffPool
 
 from benchmarks.galaxies.dataset import GalaxyDataset
 
+MLP_PARAMS = {
+    "feature_sizes": [128, 128, 128, 1],
+}
 
 GNN_PARAMS = {
     "n_outputs": 1,
@@ -75,10 +78,10 @@ EGNN_PARAMS = {
 
 DIFFPOOL_PARAMS = {
     "n_downsamples": 2,
-    "d_downsampling_factor": 5,
+    "d_downsampling_factor": 10,
     "k": 15,
     "gnn_kwargs": GNN_PARAMS,
-    "combine_hierarchies_method": "concat",
+    "combine_hierarchies_method": "mean",
     "use_edge_features": True,
     "task": "graph",
     "mlp_readout_widths": [8, 2, 2],
@@ -88,8 +91,8 @@ DIFFPOOL_PARAMS = {
 SEGNN_PARAMS = {
     "d_hidden": 64,
     "l_max_hidden": 1,
-    "num_blocks": 3,
-    "num_message_passing_steps": 2,
+    "num_blocks": 2,
+    "num_message_passing_steps": 3,
     "intermediate_hidden_irreps": True,
     "task": "graph",
     "output_irreps": e3nn.Irreps("1x0e"),
@@ -100,19 +103,22 @@ SEGNN_PARAMS = {
     ),
     "normalize_messages": True,
     "message_passing_agg": "mean",
+    "readout_agg": "mean",
+    "mlp_readout_widths": [8, 2, 2],
 }
-# SEGNN_PARAMS['hidden_irreps'] = None
 
 
 class GraphWrapper(nn.Module):
     model_name: str
     param_dict: Dict
-    norm_dict: Dict
+    apply_pbc: Callable = None
 
     @nn.compact
     def __call__(self, x):
         if self.model_name == "DeepSets":
             raise NotImplementedError
+        elif self.model_name == "MLP":
+            return jax.vmap(MLP(**self.param_dict))(x.globals)
         elif self.model_name == "GNN":
             return jax.vmap(GNN(**self.param_dict))(x)
         elif self.model_name == "EGNN":
@@ -137,6 +143,7 @@ class GraphWrapper(nn.Module):
                 node_features=nodes,
                 positions=positions,
                 velocities=None,
+                steerable_velocities=False,
                 senders=x.senders,
                 receivers=x.receivers,
                 n_node=x.n_node,
@@ -144,19 +151,7 @@ class GraphWrapper(nn.Module):
                 globals=x.globals,
                 edges=None,
                 lmax_attributes=1,
-                periodic_boundaries=True,
-                norm_dict=self.norm_dict,
-                unit_cell=np.array(
-                    [
-                        [
-                            1.0,
-                            0.0,
-                            0.0,
-                        ],
-                        [0.0, 1.0, 0.0],
-                        [0.0, 0.0, 1.0],
-                    ]
-                ),
+                apply_pbc=self.apply_pbc
             )
 
             return jax.vmap(SEGNN(**self.param_dict))(st_graph)
@@ -173,10 +168,11 @@ def loss_mse(pred_batch, cosmo_batch):
 @partial(
     jax.pmap,
     axis_name="batch",
+    static_broadcasted_argnums=(4,5)
 )
-def train_step(state, halo_batch, omega_m_batch, tpcfs_batch):
+def train_step(state, halo_batch, omega_m_batch, tpcfs_batch, apply_pbc, use_rbf):
     halo_graph = build_graph(
-        halo_batch, tpcfs_batch, k=K, use_pbc=True, use_edges=True, use_rbf=True
+        halo_batch, tpcfs_batch, k=K, apply_pbc=apply_pbc, use_edges=True, use_rbf=use_rbf
     )
 
     def loss_fn(params):
@@ -200,11 +196,12 @@ def train_step(state, halo_batch, omega_m_batch, tpcfs_batch):
 @partial(
     jax.pmap,
     axis_name="batch",
+    static_broadcasted_argnums=(4,5)
 )
-def eval_step(state, halo_batch, omega_m_batch, tpcfs_batch):
+def eval_step(state, halo_batch, omega_m_batch, tpcfs_batch, apply_pbc, use_rbf):
     # Build graph
     halo_graph = build_graph(
-        halo_batch, tpcfs_batch, k=K, use_pbc=True, use_edges=True, use_rbf=True
+        halo_batch, tpcfs_batch, k=K, apply_pbc=apply_pbc, use_edges=True, use_rbf=use_rbf
     )
 
     outputs = state.apply_fn(state.params, halo_graph)
@@ -276,7 +273,8 @@ def run_expt(
     halo_train, halo_val, halo_test = D.halos_train, D.halos_val, D.halos_test
     num_train_sims = halo_train.shape[0]
     mean, std = D.halos_mean, D.halos_std
-    norm_dict = {"mean": mean, "std": std}
+
+    apply_pbc = get_apply_pbc(std=std) if use_pbc else None
 
     omega_m_train, omega_m_val, omega_m_test = (
         D.omega_m_train,
@@ -285,26 +283,17 @@ def run_expt(
     )
 
     if use_tpcf != "none":
-        if use_tpcf == "small":
-            tpcf_idx = list(range(8))
-        elif use_tpcf == "large":
-            tpcf_idx = list(range(15, 24))
-        else:
-            tpcf_idx = list(range(24))
-
-        tpcfs_train = D.tpcfs_train[:, tpcf_idx]
-        tpcfs_val = D.tpcfs_val[:, tpcf_idx]
-        tpcfs_test = D.tpcfs_test[:, tpcf_idx]
+        tpcfs_train = D.tpcfs_train
+        tpcfs_val = D.tpcfs_val
+        tpcfs_test = D.tpcfs_test
 
         graph = build_graph(
             halo_train[:2],
             tpcfs_train[:2],
             k=K,
-            use_pbc=use_pbc,
+            apply_pbc=apply_pbc,
             use_edges=use_edges,
-            use_rbf=use_rbf,
-            mean=mean,
-            std=std,
+            use_rbf=use_rbf
         )
     else:
         tpcfs_train = None
@@ -315,12 +304,11 @@ def run_expt(
             halo_train[:2],
             None,
             k=K,
-            use_pbc=use_pbc,
+            apply_pbc=apply_pbc,
             use_edges=use_edges,
-            use_rbf=use_rbf,
-            mean=mean,
-            std=std,
+            use_rbf=use_rbf
         )
+
 
     # Split eval batches across devices
     num_local_devices = jax.local_device_count()
@@ -334,7 +322,7 @@ def run_expt(
     if get_node_reps:
         param_dict["get_node_reps"] = True
 
-    model = GraphWrapper(model_name, param_dict, norm_dict)
+    model = GraphWrapper(model_name, param_dict, apply_pbc)
     key = jax.random.PRNGKey(0)
     out, params = model.init_with_output(key, graph)
 
@@ -350,7 +338,7 @@ def run_expt(
     losses = []
     val_losses = []
     best_val = 1e10
-    with trange(n_steps, ncols=100) as steps:
+    with trange(n_steps, ncols=120) as steps:
         for step in steps:
             key, subkey = jax.random.split(key)
             idx = jax.random.choice(key, num_train_sims, shape=(n_batch,))
@@ -366,12 +354,14 @@ def run_expt(
             halo_batch, omega_m_batch, tpcfs_batch = split_batches(
                 num_local_devices, halo_batch, omega_m_batch, tpcfs_batch
             )
-            pstate, metrics = train_step(pstate, halo_batch, omega_m_batch, tpcfs_batch)
+            pstate, metrics = train_step(
+                pstate, halo_batch, omega_m_batch, tpcfs_batch, apply_pbc, use_rbf
+            )
             train_loss = unreplicate(metrics["loss"])
 
             if step % eval_every == 0:
                 outputs, val_metrics = eval_step(
-                    pstate, halo_val, omega_m_val, tpcfs_val
+                    pstate, halo_val, omega_m_val, tpcfs_val, apply_pbc, use_rbf
                 )
                 val_loss = unreplicate(val_metrics["loss"])
 
@@ -380,7 +370,7 @@ def run_expt(
                     tag = " (best)"
 
                     outputs, test_metrics = eval_step(
-                        pstate, halo_test, omega_m_test, tpcfs_test
+                        pstate, halo_test, omega_m_test, tpcfs_test, apply_pbc, use_rbf
                     )
                     test_loss_ckp = unreplicate(test_metrics["loss"])
                 else:
@@ -394,7 +384,9 @@ def run_expt(
             losses.append(train_loss)
             val_losses.append(val_loss)
 
-        outputs, test_metrics = eval_step(pstate, halo_test, omega_m_test, tpcfs_test)
+        outputs, test_metrics = eval_step(
+            pstate, halo_test, omega_m_test, tpcfs_test, apply_pbc, use_rbf
+        )
         test_loss = unreplicate(test_metrics["loss"])
         print(
             "Training done.\n"
@@ -414,7 +406,10 @@ def run_expt(
 
 
 def main(model, feats, lr, decay, steps, batch_size, use_rbf, use_tpcf, k):
-    if model == "GNN":
+    if model == 'MLP':
+        MLP_PARAMS['d_hidden'] = MLP_PARAMS['feature_sizes'][0]
+        params = MLP_PARAMS
+    elif model == "GNN":
         params = GNN_PARAMS
     elif model == "EGNN":
         params = EGNN_PARAMS
@@ -459,7 +454,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, help="Learning rate", default=1e-4)
     parser.add_argument("--decay", type=float, help="Weight decay", default=1e-5)
     parser.add_argument("--steps", type=int, help="Number of steps", default=5000)
-    parser.add_argument("--batch_size", help="Batch size", default=32)
+    parser.add_argument("--batch_size", type=int, help="Batch size", default=32)
     parser.add_argument(
         "--use_rbf",
         type=bool,

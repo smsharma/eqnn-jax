@@ -51,9 +51,7 @@ class TensorProductLinearGate(nn.Module):
             gradient_normalization=self.gradient_normalization,
             path_normalization=self.path_normalization,
         )
-        # print('prod:', tensor_product(x, y))
         out = linear(tensor_product(x, y))
-        # print('out:', out)
         if self.activation:
             scalar_activation = getattr(jax.nn, self.scalar_activation)
             gate_activation = getattr(jax.nn, self.gate_activation)
@@ -337,10 +335,19 @@ class SEGNN(nn.Module):
             )
             agg_nodes = readout_agg_fn(nodes_pre_pool, axis=0)
 
+            if processed_graphs.globals is not None:
+                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
+                
+                norm = nn.LayerNorm()
+                agg_nodes = norm(agg_nodes)
+                
             # Readout and return
-            out = MLP(
-                [w * self.d_hidden for w in self.mlp_readout_widths] + [self.n_outputs]
-            )(agg_nodes)
+            mlp = MLP([
+                self.mlp_readout_widths[0] * agg_nodes.shape[-1]] + \
+                [w * self.d_hidden for w in self.mlp_readout_widths[1:]] + \
+                [self.n_outputs,]
+            )                                                                        
+            out = mlp(agg_nodes)                                                             
             return out
         else:
             raise ValueError(f"Invalid task {self.task}")
