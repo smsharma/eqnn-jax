@@ -55,7 +55,7 @@ def _parse_function(proto, features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'vx', 'vy'
 
     # Stack the feature tensors to create a single tensor
     # Each tensor must have the same shape
-    stacked_features = tf.stack(feature_tensors, axis=1)  # Creates a [num_points, num_features] tensor
+    stacked_features = tf.stack(feature_tensors, axis=1) / 1000.  # Creates a [num_points, num_features] tensor
     stacked_params = tf.stack(param_tensors, axis=0)  # Creates a [num_params] tensor
 
     return stacked_features, stacked_params
@@ -83,13 +83,14 @@ def get_halo_dataset(batch_size=64,
     dataset = dataset.map(partial(_parse_function, features=features, params=params))
 
     # Get mean and std as tf arrays
-    mean = tf.constant([MEAN_HALOS_DICT[f] for f in features], dtype=tf.float32)
-    std = tf.constant([STD_HALOS_DICT[f] for f in features], dtype=tf.float32)
+    mean = tf.constant([MEAN_HALOS_DICT[f] for f in features], dtype=tf.float32) / 1000.
+    std = tf.constant([STD_HALOS_DICT[f] for f in features], dtype=tf.float32) / 1000.
     mean_params = tf.constant([MEAN_PARAMS_DICT[f] for f in params], dtype=tf.float32)
     std_params = tf.constant([STD_PARAMS_DICT[f] for f in params], dtype=tf.float32)
 
     if standardize:
-        dataset = dataset.map(lambda x, p: ((x - mean) / std, (p - mean_params) / std_params))
+        # dataset = dataset.map(lambda x, p: ((x - mean) / std, (p - mean_params) / std_params))
+        dataset = dataset.map(lambda x, p: ((x - mean) / std, p))
 
     dataset = dataset.batch(batch_size)
     if split == 'train':

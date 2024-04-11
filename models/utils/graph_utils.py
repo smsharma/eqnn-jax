@@ -2,42 +2,44 @@ import jax
 import jax.numpy as np
 import jraph
 
+from typing import Callable, Optional
 from functools import partial
 
 EPS = 1e-7
 
-def apply_pbc(
-    dr: np.array,
-    cell: np.array = np.array(
+def get_apply_pbc(std: np.array=None, cell: np.array = np.array(
         [
-            [
-                1.0,
-                0.0,
-                0.0,
-            ],
+            [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ]
     ),
-) -> np.array:
-    """Apply periodic boundary conditions to a displacement vector, dr, given a cell.
+):
+    if std is not None:
+        cell = cell / std[:3]
+        cell -= 0.5 / std[:3]
 
-    Args:
-        dr (np.array): An array of shape (N,3) containing the displacement vector
-        cell_matrix (np.array): A 3x3 matrix describing the box dimensions and orientation.
+    def apply_pbc(
+        dr: np.array,
+    ) -> np.array:
+        """Apply periodic boundary conditions to a displacement vector, dr, given a cell.
 
-    Returns:
-        np.array: displacement vector with periodic boundary conditions applied
-    """
-    return dr - np.round(dr.dot(np.linalg.inv(cell))).dot(cell)
+        Args:
+            dr (np.array): An array of shape (N,3) containing the displacement vector
+            cell_matrix (np.array): A 3x3 matrix describing the box dimensions and orientation.
+
+        Returns:
+            np.array: displacement vector with periodic boundary conditions applied
+        """
+        return (dr - np.round(dr.dot(np.linalg.inv(cell))).dot(cell)) 
+    return apply_pbc
 
 
-@partial(jax.jit, static_argnums=(1,))
+@partial(jax.jit, static_argnums=(1,2))
 def nearest_neighbors(
     x: np.array,
     k: int,
-    cell: np.array = None,
-    mask: np.array = None,
+    apply_pbc: Optional[Callable] = None,
 ):
     """Returns the nearest neighbors of each node in x.
 
@@ -53,80 +55,55 @@ def nearest_neighbors(
     n_nodes = x.shape[0]
     # Compute the vector difference between positions
     dr = (x[:, None, :] - x[None, :, :]) + EPS
-    if cell != None:
-        dr = apply_pbc(
-            dr=dr,
-            cell=cell,
-        )
-
-    # Calculate the distance matrix 
+    if apply_pbc is not None:
+        dr = apply_pbc(dr)
+    # Calculate the distance matrix
     distance_matrix = np.sum(dr**2, axis=-1)
-
     # Get indices of nearest neighbors
     indices = np.argsort(distance_matrix, axis=-1)[:, :k]
 
     # Create sources and targets arrays
     sources = np.repeat(np.arange(n_nodes), k)
     targets = indices.ravel()
-
     return sources, targets, dr[sources, targets]
 
-def build_graph(halos, 
-                tpcfs, 
-                k, 
-                use_pbc=True, 
-                use_edges=True, 
-                boxsize=1000., 
-                unit_cell = np.array([[1.,0.,0.,],[0.,1.,0.], [0.,0.,1.]]), 
-                mean=None, 
-                std=None,
-                use_rbf=False,
-                sigma_num=8):
-    
-    # if mean is not None and std is not None:
-    #     halos = halos * std + mean
-    #     halos /= boxsize
 
+def build_graph(
+    halos,
+    tpcfs,
+    k,
+    use_edges=True,
+    apply_pbc: Optional[Callable] = None,
+    use_rbf=False,
+    sigma_num=16,
+):
     n_batch = len(halos)
-    
-    if use_pbc:
-        if std is not None:
-            halos += std[:3]
-            cell = np.diag(boxsize/std[:3])
-        else:
-            cell = np.array([[1.,0.,0.,],[0.,1.,0.], [0.,0.,1.]])
-    else:
-        cell = None
-        
-    sources, targets, distances = jax.vmap(partial(nearest_neighbors), in_axes=(0, None, None))(halos[..., :3], k, cell)
-    if use_pbc and std is not None:
-        halos -= std[:3]
-    
+
+    sources, targets, distances = jax.vmap(
+        partial(nearest_neighbors), in_axes=(0, None, None)
+    )(halos[..., :3], k, apply_pbc,)
+
     if use_edges:
-        edges = np.sqrt(np.sum(distances **2, axis=-1, keepdims=True))
+        edges = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
         if use_rbf:
             min_sigma = np.min(edges)
             max_sigma = np.mean(edges)
-            sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num) 
-            edges = [np.exp(- edges**2 / (2 * sigma**2)) for sigma in sigma_vals]
+            sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num)
+            edges = [np.exp(-(edges**2) / (2 * sigma**2)) for sigma in sigma_vals]
             edges = np.concatenate(edges, axis=-1)
     else:
         edges = None
 
-    print('node features')
-    print(halos)
-    print('edge features')
-    print(edges.shape)
-    
     return jraph.GraphsTuple(
-            n_node=np.array([[halos.shape[1]]]*n_batch),
-            n_edge=np.array(n_batch * [[k]]),
-            nodes=halos,
-            edges=edges,
-            globals=tpcfs,
-            senders=sources,
-            receivers=targets,
-        )
+        n_node=np.array([[halos.shape[1]]] * n_batch),
+        n_edge=np.array(n_batch * [[k]]),
+        nodes=halos,
+        edges=edges,
+        globals=tpcfs,
+        senders=sources,
+        receivers=targets,
+    )
+
 
 def add_graphs_tuples(
     graphs: jraph.GraphsTuple, other_graphs: jraph.GraphsTuple
