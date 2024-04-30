@@ -55,7 +55,7 @@ class GalaxyDataset:
             self.tpcfs_train, self.tpcfs_val, self.tpcfs_test = tpcfs_train, tpcfs_val, tpcfs_test
             self.tpcfs_train, self.tpcfs_val, self.tpcfs_test = self.normalize(tpcfs_train, tpcfs_val, tpcfs_test)
 
-        self.omega_m_train, self.omega_m_val, self.omega_m_test = self.load_labels(data_dir)
+        self.targets_train, self.targets_val, self.targets_test = self.load_targets(data_dir)
 
   
     def load_node_feats(self, data_dir, use_pos, use_vel, use_mass, n_nodes=5000) -> Tuple[np.ndarray, ...]:
@@ -74,7 +74,7 @@ class GalaxyDataset:
         
         return halos_train, halos_val, halos_test
 
-    def load_labels(self, data_dir) -> Tuple[np.ndarray, ...]:
+    def load_targets(self, data_dir) -> Tuple[np.ndarray, ...]:
         cosmology_train = pd.read_csv(data_dir / f"train_cosmology.csv")
         cosmology_val = pd.read_csv(data_dir / f"val_cosmology.csv")
         cosmology_test = pd.read_csv(data_dir / f"test_cosmology.csv")
@@ -83,7 +83,15 @@ class GalaxyDataset:
         omega_m_val = np.array(cosmology_val["Omega_m"].values)[:, None]
         omega_m_test = np.array(cosmology_test["Omega_m"].values)[:, None]
 
-        return omega_m_train, omega_m_val, omega_m_test
+        sigma_8_train = np.array(cosmology_train["sigma_8"].values)[:, None]
+        sigma_8_val = np.array(cosmology_val["sigma_8"].values)[:, None]
+        sigma_8_test = np.array(cosmology_test["sigma_8"].values)[:, None]
+
+        targets_train = np.concatenate([omega_m_train, sigma_8_train], axis=-1)
+        targets_val = np.concatenate([omega_m_val, sigma_8_val], axis=-1)
+        targets_test = np.concatenate([omega_m_test, sigma_8_test], axis=-1)
+
+        return targets_train, targets_val, targets_test
         
     
     def normalize(self, feats_train, feats_val, feats_test, eps=1e-8) -> Tuple[np.ndarray, ...]:

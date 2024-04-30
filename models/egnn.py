@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import jraph
 from jraph._src import utils
 
-from models.utils.graph_utils import fourier_features
+from models.utils.graph_utils import fourier_features, get_apply_pbc
 from models.mlp import MLP
 
 
@@ -18,6 +18,7 @@ def get_edge_mlp_updates(
     fourier_feature_kwargs={"num_encodings": 16, "include_self": True},
     tanh_out=False,
     soft_edges=False,
+    apply_pbc=None
 ) -> Callable:
     def update_fn(
         edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
@@ -78,7 +79,10 @@ def get_edge_mlp_updates(
         )
 
         # Relative distances, optionally with Fourier features
-        d_ij2 = jnp.sum((x_i - x_j) ** 2, axis=1, keepdims=True)
+        d_ij = x_i - x_j
+        if apply_pbc:
+            d_ij = apply_pbc(d_ij)
+        d_ij2 = jnp.sum(d_ij ** 2, axis=1, keepdims=True)
         d_ij2 = (
             fourier_features(d_ij2, **fourier_feature_kwargs)
             if use_fourier_features
@@ -106,7 +110,7 @@ def get_edge_mlp_updates(
         if tanh_out:
             trans = jax.nn.tanh(trans)
 
-        x_ij_trans = (x_i - x_j) * trans
+        x_ij_trans = d_ij * trans
         x_ij_trans = jnp.clip(x_ij_trans, -100.0, 100.0)  # From original code
 
         return x_ij_trans, m_ij
@@ -122,6 +126,7 @@ def get_node_mlp_updates(
     position_only=False,
     normalize_messages=False,
     decouple_pos_vel_updates=False,
+    apply_pbc=None
 ) -> Callable:
     def update_fn(
         nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
@@ -147,10 +152,14 @@ def get_node_mlp_updates(
             if nodes.shape[-1] == 3:  # No scalar attributes
                 x_i = nodes
                 x_i_p = x_i + sum_x_ij
+                if apply_pbc:
+                    x_i_p = apply_pbc(x_i_p)
                 return x_i_p
             else:  # Additional scalar attributes
                 x_i, h_i = nodes[..., :3], nodes[..., 3:]
                 x_i_p = x_i + sum_x_ij
+                if apply_pbc:
+                    x_i_p = apply_pbc(x_i_p)
                 phi_h = MLP(
                     [d_hidden] * (n_layers - 1) + [h_i.shape[-1]], activation=activation
                 )
@@ -186,6 +195,9 @@ def get_node_mlp_updates(
                     # Assumes dynamical system with coupled position and velocity updates, as in original paper!
                     x_i_p = x_i + v_i_p
 
+                if apply_pbc:
+                    x_i_p = apply_pbc(x_i_p)
+
                 return jnp.concatenate([x_i_p, v_i, concats], -1)
             else:  # Additional scalar attributes
                 x_i, v_i, h_i = (
@@ -217,6 +229,8 @@ def get_node_mlp_updates(
                     # Assumes dynamical system with coupled position and velocity updates, as in original paper!
                     x_i_p = x_i + v_i_p
 
+                if apply_pbc:
+                    x_i_p = apply_pbc(x_i_p)
                 h_i_p = h_i + phi_h(concats)  # Skip connection, as in original paper
 
                 return jnp.concatenate([x_i_p, v_i, h_i_p], -1)
@@ -252,6 +266,7 @@ class EGNN(nn.Module):
     )
     n_outputs: int = 1  # Number of outputs for graph-level readout
     d_output: int = 3
+    apply_pbc: Callable = None
 
     @nn.compact
     def __call__(self, graphs: jraph.GraphsTuple) -> jraph.GraphsTuple:
@@ -293,6 +308,7 @@ class EGNN(nn.Module):
                 position_only=self.positions_only,
                 normalize_messages=self.normalize_messages,
                 decouple_pos_vel_updates=self.decouple_pos_vel_updates,
+                apply_pbc=self.apply_pbc
             )
             update_edge_fn = get_edge_mlp_updates(
                 self.d_hidden,
@@ -303,6 +319,7 @@ class EGNN(nn.Module):
                 fourier_feature_kwargs=self.fourier_feature_kwargs,
                 tanh_out=self.tanh_out,
                 soft_edges=self.soft_edges,
+                apply_pbc=self.apply_pbc
             )
 
             # Instantiate graph network and apply EGCL

@@ -123,7 +123,7 @@ class GNN(nn.Module):
 
         activation = getattr(nn, self.activation)
 
-        if self.message_passing_agg not in ["sum", "mean", "mmax"]:
+        if self.message_passing_agg not in ["sum", "mean", "max"]:
             raise ValueError(
                 f"Invalid message passing aggregation function {self.message_passing_agg}"
             )
@@ -161,7 +161,7 @@ class GNN(nn.Module):
             )
         # node_reps = processed_graphs
 
-        if self.readout_agg not in ["sum", "mean", "mmax"]:
+        if self.readout_agg not in ["sum", "mean", "max"]:
             raise ValueError(
                 f"Invalid global aggregation function {self.message_passing_agg}"
             )

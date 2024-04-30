@@ -23,7 +23,6 @@ from e3nn_jax.flax import Linear, MultiLayerPerceptron
 
 from models.mlp import MLP
 from models.utils.irreps_utils import balanced_irreps
-from models.utils.graph_utils import apply_pbc
 
 
 def get_edge_mlp_updates(
@@ -76,6 +75,7 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_edges: int = 20):
         m_i = receivers / jnp.sqrt(n_edges)
         irreps = irreps_out.filter(keep=m_i.irreps)
         gate_irreps = Irreps(f"{irreps.num_irreps - irreps.count('0e')}x0e")
+
         _irreps_out = (gate_irreps + irreps).regroup()
         m_i = Linear(_irreps_out)(m_i) + Linear(_irreps_out)(nodes)  # Skip
         nodes = e3nn.gate(m_i)
