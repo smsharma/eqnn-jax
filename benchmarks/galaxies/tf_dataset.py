@@ -68,7 +68,7 @@ def get_halo_dataset(batch_size=64,
                      return_mean_std=False,
                      standardize=True,
                      seed=42,
-                     tfrecords_path='/n/holystore01/LABS/iaifi_lab/Lab/quijote_bsq_tfrecords',
+                     tfrecords_path='/pool001/jballa/quijote_bsq_tfrecords',
                      use_tpcf='none'):
 
     files = tf.io.gfile.glob(f"{tfrecords_path}/halos*{split}*.tfrecord")

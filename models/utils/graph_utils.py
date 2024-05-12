@@ -2,6 +2,8 @@ import jax
 import jax.numpy as np
 import jraph
 
+import e3nn_jax as e3nn
+
 from typing import Callable, Optional
 from functools import partial
 
@@ -129,7 +131,6 @@ def ball_query(x, centroids, radius, apply_pbc):
         jnp.ndarray: A list of boolean masks indicating which points are within the radius for each centroid.
     """
     # Compute the vector difference between positions
-    centroids = x[centroid_idx]
     dr = (centroids[:, None, :] - x[None, :, :]) + EPS
     if apply_pbc:
         dr = apply_pbc(dr)
@@ -159,7 +160,7 @@ def update_if_mask_true(i, j, idx, sources, targets, distances, mask, distance_s
 
 
 @partial(jax.jit, static_argnums=(1,2))
-def adj_within_radius(
+def neighbors_within_radius(
     x: np.array,
     r: float,
     apply_pbc: Optional[Callable] = None,
@@ -169,7 +170,6 @@ def adj_within_radius(
     Args:
         x (jnp.array): positions of nodes
         r (float): radial cutoff
-        unit_cell (jnp.array, optional): unit cell for applying periodic boundary conditions. Defaults to None.
         mask (jnp.array, optixonal): node mask. Defaults to None.
 
     Returns:
@@ -207,13 +207,35 @@ def adj_within_radius(
     return sources[:num_edges], targets[:num_edges], distances[:num_edges], num_edges
 
 
+
+@partial(jax.jit, static_argnums=(1,))
+def compute_distances(
+    x: np.array,
+    apply_pbc: Optional[Callable] = None,
+):
+    """Returns the pairwise distances of nodes in x.
+
+    Args:
+        x (jnp.array): positions of nodes
+        mask (jnp.array, optixonal): node mask. Defaults to None.
+
+    Returns:
+        distances (jnp.array): distances between pairs of neighbors
+    """
+    n_nodes = x.shape[0]
+    dr = x[:, None, :] - x[None, :, :]
+    if apply_pbc:
+        dr = apply_pbc(dr)
+    return np.sqrt(np.sum(dr**2, axis=-1))
+
+
 def build_graph(
     node_feats,
     global_feats,
     k,
     use_edges=True,
     apply_pbc: Optional[Callable] = None,
-    use_rbf=False,
+    n_radial_basis=4,
     sigma_num=16,
     radius=None
 ):
@@ -222,7 +244,18 @@ def build_graph(
     n_node = np.array([[n_nodes]] * n_batch)
 
     if radius is not None:
-        raise NotImplementedError
+        distances = jax.vmap(
+            partial(compute_distances), in_axes=(0, None)
+        )(node_feats[..., :3], apply_pbc)
+
+        # print(distances.shape)
+        mask = (distances < radius) & (distances > 0)  # Exclude self-distance
+        
+        sources, targets = np.where(mask)
+        distances = distances[sources, targets]
+
+        n_edge = np.array([np.sum(mask[i]) for i in range(x.shape[0])])  
+
     else:
         sources, targets, distances = jax.vmap(
             partial(nearest_neighbors), in_axes=(0, None, None)
@@ -233,12 +266,14 @@ def build_graph(
     if use_edges:
         edges = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
 
-        if use_rbf:
-            min_sigma = np.min(edges)
-            max_sigma = np.mean(edges)
-            sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num)
-            edges = [np.exp(-(edges**2) / (2 * sigma**2)) for sigma in sigma_vals]
-            edges = np.concatenate(edges, axis=-1)
+        if n_radial_basis > 0:
+            edges = e3nn.bessel(edges, n_radial_basis)
+            edges = np.squeeze(edges)
+            # min_sigma = np.min(edges)
+            # max_sigma = np.mean(edges)
+            # sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num)
+            # edges = [np.exp(-(edges**2) / (2 * sigma**2)) for sigma in sigma_vals]
+            # edges = np.concatenate(edges, axis=-1)
 
         if radius is not None:
             edges = np.concatenate(edges, axis=0)

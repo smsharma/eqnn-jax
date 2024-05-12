@@ -91,7 +91,6 @@ DIFFPOOL_PARAMS = {
 POINTNET_PARAMS = {
     "n_downsamples": 2,
     "d_downsampling_factor": 5,
-    "k": 15,
     "radius": 0.2,
     "gnn_kwargs": GNN_PARAMS,
     "combine_hierarchies_method": "mean",
@@ -124,7 +123,7 @@ NEQUIP_PARAMS = {
     "d_hidden": 64,
     "l_max_hidden":2,
     "l_max_attr":2,
-    "sphharm_norm": 'component',
+    "sphharm_norm": 'norm',
     "num_message_passing_steps": 3,
     "n_layers": 3,
     "task": "graph",
@@ -133,7 +132,7 @@ NEQUIP_PARAMS = {
     "message_passing_agg": "mean",
     "readout_agg": "mean",
     "mlp_readout_widths": [8, 2, 2],
-    "n_radial_basis": 4
+    "n_radial_basis": 8
 }
 
 
@@ -219,20 +218,20 @@ def loss_mse(pred_batch, cosmo_batch):
     axis_name="batch",
     static_broadcasted_argnums=(4,5,6)
 )
-def train_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, use_rbf, radius):
+def train_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis, radius):
     halo_graph = build_graph(
         halo_batch, 
         tpcfs_batch, 
         k=K, 
         apply_pbc=apply_pbc, 
         use_edges=True, 
-        use_rbf=use_rbf,
+        n_radial_basis=n_radial_basis,
         radius=radius
     )
 
     def loss_fn(params):
-        outputs = state.apply_fn(params, halo_graph)
-        # outputs, assignments = state.apply_fn(params, halo_graph)
+        # outputs = state.apply_fn(params, halo_graph)
+        outputs, assignments = state.apply_fn(params, halo_graph)
         if len(outputs.shape) > 2:
             outputs = np.squeeze(outputs, axis=-1)
         loss = loss_mse(outputs, y_batch)
@@ -253,7 +252,7 @@ def train_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, use_rbf, radi
     axis_name="batch",
     static_broadcasted_argnums=(4,5,6)
 )
-def eval_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, use_rbf, radius):
+def eval_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis, radius):
     # Build graph
     halo_graph = build_graph(
         halo_batch, 
@@ -261,31 +260,30 @@ def eval_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, use_rbf, radiu
         k=K, 
         apply_pbc=apply_pbc, 
         use_edges=True, 
-        use_rbf=use_rbf,
+        n_radial_basis=n_radial_basis,
         radius=radius
     )
 
-    outputs = state.apply_fn(state.params, halo_graph)
-
-    # outputs, assignments = state.apply_fn(state.params, halo_graph)
+    # outputs = state.apply_fn(state.params, halo_graph)
+    outputs, assignments = state.apply_fn(state.params, halo_graph)
     if len(outputs.shape) > 2:
         outputs = np.squeeze(outputs, axis=-1)
     loss = jax.lax.stop_gradient(loss_mse(outputs, y_batch))
 
-    return outputs, {"loss": jax.lax.pmean(loss, "batch")} #, assignments
+    return outputs, {"loss": jax.lax.pmean(loss, "batch")} , assignments
 
 
 def split_batches(num_local_devices, halo_batch, y_batch, tpcfs_batch):
-    halo_batch = jax.tree_map(
+    halo_batch = jax.tree.map(
         lambda x: np.split(x, num_local_devices, axis=0), halo_batch
     )
-    y_batch = jax.tree_map(
+    y_batch = jax.tree.map(
         lambda x: np.split(x, num_local_devices, axis=0), y_batch
     )
     halo_batch, y_batch = np.array(halo_batch), np.array(y_batch)
 
     if tpcfs_batch is not None:
-        tpcfs_batch = jax.tree_map(
+        tpcfs_batch = jax.tree.map(
             lambda x: np.split(x, num_local_devices, axis=0), tpcfs_batch
         )
         tpcfs_batch = np.array(tpcfs_batch)
@@ -301,7 +299,7 @@ def run_expt(
     data_dir,
     use_pbc=True,
     use_edges=True,
-    use_rbf=False,
+    n_radial_basis=0,
     use_tpcf="none",
     radius=None,
     n_steps=1000,
@@ -318,9 +316,8 @@ def run_expt(
     experiments_base_dir = Path(__file__).parent / "experiments/"
     d_hidden = param_dict["d_hidden"]
     experiment_id = (
-        f"{model_name}_{feats}_{n_batch}b_{n_steps}s_{d_hidden}d_{K}k_"
+        f"{model_name}_{feats}_{n_batch}b_{n_steps}s_{d_hidden}d_{K}k_{n_radial_basis}rbf"
         + "tpcf-" + use_tpcf
-        + "_rbf" * use_rbf
         + f"_{radius}r"
     )
 
@@ -373,7 +370,7 @@ def run_expt(
         k=K,
         apply_pbc=apply_pbc,
         use_edges=use_edges,
-        use_rbf=use_rbf,
+        n_radial_basis=n_radial_basis,
         radius=radius
     )
 
@@ -397,9 +394,12 @@ def run_expt(
     # Define train state and replicate across devices
     replicate = flax.jax_utils.replicate
     unreplicate = flax.jax_utils.unreplicate
-    tx = optax.adamw(learning_rate=learning_rate, weight_decay=weight_decay)
+
+    lr_scheduler = optax.linear_onecycle_schedule(n_steps//2, learning_rate)
+    tx = optax.adamw(learning_rate=lr_scheduler, weight_decay=weight_decay)
     state = TrainState.create(apply_fn=model.apply, params=params, tx=tx)
     pstate = replicate(state)
+
 
     # Run training loop
     print("Training...")
@@ -423,35 +423,39 @@ def run_expt(
                 num_local_devices, halo_batch, y_batch, tpcfs_batch
             )
             pstate, metrics = train_step(
-                pstate, halo_batch, y_batch, tpcfs_batch, apply_pbc, use_rbf, radius
+                pstate, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis, radius
             )
             train_loss = unreplicate(metrics["loss"])
 
             if step % eval_every == 0:
-                outputs, val_metrics = eval_step(
-                    pstate, halo_val, y_val, tpcfs_val, apply_pbc, use_rbf, radius
-                )
-                # outputs, val_metrics, assignments = eval_step(
-                #     pstate, halo_val, y_val, tpcfs_val, apply_pbc, use_rbf
+                # outputs, val_metrics = eval_step(
+                #     pstate, halo_val, y_val, tpcfs_val, apply_pbc, n_radial_basis, radius
                 # )
+                outputs, val_metrics, assignments = eval_step(
+                    pstate, halo_val, y_val, tpcfs_val, apply_pbc, n_radial_basis, radius
+                )
                 val_loss = unreplicate(val_metrics["loss"])
                 
                 # print(type(assignments))
                 # assignments = np.reshape(assignments, (num_local_devices*assignments.shape[1], assignments.shape[-1]))
                 
-                # for a, assignment in enumerate(assignments):
-                #     np.save(current_experiment_dir / f"assignments_{a}.npy", assignment)
+                for a, assignment in enumerate(assignments):
+                    if a == 0:
+                        c = assignment.reshape((200, 5000, 1000))
+                        colors = np.argmax(c, axis=-1)[0]
+                        np.save(current_experiment_dir / f"colors.npy", colors)
+                    np.save(current_experiment_dir / f"assignments_{a}.npy", assignment)
 
                 if val_loss < best_val:
                     best_val = val_loss
                     tag = " (best)"
 
-                    outputs, test_metrics = eval_step(
-                        pstate, halo_test, y_test, tpcfs_test, apply_pbc, use_rbf, radius
-                    )
-                    # outputs, test_metrics, assignments = eval_step(
-                    #     pstate, halo_test, y_test, tpcfs_test, apply_pbc, use_rbf
+                    # outputs, test_metrics = eval_step(
+                    #     pstate, halo_test, y_test, tpcfs_test, apply_pbc, n_radial_basis, radius
                     # )
+                    outputs, test_metrics, assignments = eval_step(
+                        pstate, halo_test, y_test, tpcfs_test, apply_pbc, n_radial_basis, radius
+                    )
                     test_loss_ckp = unreplicate(test_metrics["loss"])
                 else:
                     tag = ""
@@ -464,12 +468,12 @@ def run_expt(
             losses.append(train_loss)
             val_losses.append(val_loss)
 
-        outputs, test_metrics = eval_step(
-            pstate, halo_test, y_test, tpcfs_test, apply_pbc, use_rbf, radius
-        )
-        # outputs, test_metrics, assignments = eval_step(
-        #     pstate, halo_test, y_test, tpcfs_test, apply_pbc, use_rbf
+        # outputs, test_metrics = eval_step(
+        #     pstate, halo_test, y_test, tpcfs_test, apply_pbc, n_radial_basis, radius
         # )
+        outputs, test_metrics, assignments = eval_step(
+            pstate, halo_test, y_test, tpcfs_test, apply_pbc, n_radial_basis, radius
+        )
         test_loss = unreplicate(test_metrics["loss"])
         print(
             "Training done.\n"
@@ -488,7 +492,7 @@ def run_expt(
     np.save(current_experiment_dir / "val_losses.npy", val_losses)
 
 
-def main(model, feats, target, lr, decay, steps, batch_size, use_rbf, use_tpcf, k, radius):
+def main(model, feats, target, lr, decay, steps, batch_size, n_radial_basis, use_tpcf, k, radius):
     if model == 'MLP':
         MLP_PARAMS['d_hidden'] = MLP_PARAMS['feature_sizes'][0]
         params = MLP_PARAMS
@@ -524,7 +528,7 @@ def main(model, feats, target, lr, decay, steps, batch_size, use_rbf, use_tpcf, 
     else:
         raise NotImplementedError
 
-    data_dir = Path("/n/holystore01/LABS/iaifi_lab/Lab/set-diffuser-data/val_split/")
+    data_dir = Path(__file__).parent / "data/"
 
     run_expt(
         model,
@@ -536,7 +540,7 @@ def main(model, feats, target, lr, decay, steps, batch_size, use_rbf, use_tpcf, 
         weight_decay=decay,
         n_steps=steps,
         n_batch=batch_size,
-        use_rbf=use_rbf,
+        n_radial_basis=n_radial_basis,
         use_tpcf=use_tpcf,
         radius=radius
     )
@@ -556,10 +560,10 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, help="Number of steps", default=5000)
     parser.add_argument("--batch_size", type=int, help="Batch size", default=32)
     parser.add_argument(
-        "--use_rbf",
-        type=bool,
-        help="Whether to include RBF kernel for edge features",
-        default=False,
+        "--n_radial_basis",
+        type=int,
+        help="Number of radial basis functions.",
+        default=0,
     )
 
     parser.add_argument(

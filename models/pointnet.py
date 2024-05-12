@@ -69,7 +69,7 @@ class PointNet(nn.Module):
     apply_pbc: Callable = None
 
     @nn.compact
-    def __call__(self, x, return_assignments=False): 
+    def __call__(self, x, return_assignments=True): 
         # If graph prediction task, collect pooled embeddings at each hierarchy level
         if self.task == "graph":
             x_pool = jnp.zeros((self.n_downsamples, self.gnn_kwargs['d_output']))
@@ -89,6 +89,7 @@ class PointNet(nn.Module):
             # Create assignment matrix
             centroids, s = self.sample_and_group(node_pos, n_nodes_downsampled, self.radius, self.apply_pbc) 
             s = jax.nn.softmax(s, axis=1)  # Row-wise softmax
+            assignments.append(s)
             node_pos = centroids # Pool node positions
 
             # Sparse adjacency matrix
