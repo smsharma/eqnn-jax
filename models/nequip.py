@@ -1,6 +1,6 @@
 # Linear on nodes
 # TP + aggregate
-# divide by average number of neighbors
+# Divide by average number of neighbors
 # Concatenation
 # Linear on nodes
 # Self-connection
@@ -26,17 +26,19 @@ from models.utils.irreps_utils import balanced_irreps
 
 
 def get_edge_mlp_updates(
-    rel_distance: Irreps,
+    rel_distance: IrrepsArray,
     irreps_attr: Irreps = None,
     sphharm_norm: str = "component",
     n_layers: int = 2,
     d_hidden: int = 64,
     n_radial_basis: int = 4,
+    r_cutoff: float = 1.0,
+    activation: str = "gelu",
 ):
     # irreps_out = irreps_out.regroup()
 
     def update_fn(
-        edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
+        edges: jnp.array, senders: IrrepsArray, receivers: IrrepsArray, globals: jnp.array
     ) -> jnp.array:
         d_ij = jnp.linalg.norm(rel_distance.array, axis=-1)
         m_ij = Linear(senders.irreps)(senders)
@@ -52,11 +54,12 @@ def get_edge_mlp_updates(
         m_ij = tensor_product(m_ij, a_ij)
 
         # Radial
-        R_ij = e3nn.bessel(d_ij, n_radial_basis)
+        R_ij = e3nn.bessel(d_ij, n_radial_basis, r_cutoff)
 
+        activation = getattr(nn, activation)
         W_R_ij = MultiLayerPerceptron(
             n_layers * (d_hidden,) + (m_ij.irreps.num_irreps,),
-            nn.gelu,
+            activation,
             output_activation=False,
         )(R_ij)
 
@@ -95,12 +98,14 @@ class NequIP(nn.Module):
     normalize_messages: bool = True  # Normalize messages by number of edges
     num_message_passing_steps: int = 3  # Number of message passing steps
     n_layers: int = 3  # Number of gated tensor products in each message passing step
+    activation: str = "gelu"  # Activation function for MLPs
     message_passing_agg: str = "sum"  # "sum", "mean", "max"
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "node"  # "graph" or "node"
     n_outputs: int = 1  # Number of outputs for graph-level readout
-    n_radial_basis: int = 4  # Number of radial basis functions
+    n_radial_basis: int = 4  # Number of radial basis (Bessel) functions
+    r_cutoff: float = 1.0  # Cutoff radius for radial basis (Bessel) functions
 
     @nn.compact
     def __call__(
@@ -119,7 +124,7 @@ class NequIP(nn.Module):
         )  # Steerable geometric features
         irreps_hidden = balanced_irreps(
             lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True
-        )  # Hidden features
+        )  # Hidden features # NOT USED
         irreps_in = graphs.nodes.irreps  # Input irreps
         irreps_out = (
             self.irreps_out if self.irreps_out is not None else irreps_in
@@ -141,6 +146,7 @@ class NequIP(nn.Module):
                 irreps_attr=irreps_attr,
                 sphharm_norm=self.sphharm_norm,
                 n_radial_basis=self.n_radial_basis,
+                r_cutoff=self.r_cutoff
             )
             update_node_fn = get_node_mlp_updates(
                 irreps_out=irreps_in,
