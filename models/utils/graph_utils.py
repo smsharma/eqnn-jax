@@ -2,6 +2,8 @@ import jax
 import jax.numpy as np
 import jraph
 
+import e3nn_jax as e3nn
+
 from typing import Callable, Optional
 from functools import partial
 
@@ -54,11 +56,13 @@ def nearest_neighbors(
     """
     n_nodes = x.shape[0]
     # Compute the vector difference between positions
-    dr = (x[:, None, :] - x[None, :, :]) + EPS
-    if apply_pbc is not None:
+    dr = (x[:, None, :] - x[None, :, :]) + EPS # (n_nodes, n_nodes, 3)
+    if apply_pbc:
         dr = apply_pbc(dr)
+
     # Calculate the distance matrix
     distance_matrix = np.sum(dr**2, axis=-1)
+    
     # Get indices of nearest neighbors
     indices = np.argsort(distance_matrix, axis=-1)[:, :k]
 
@@ -68,38 +72,221 @@ def nearest_neighbors(
     return sources, targets, dr[sources, targets]
 
 
+@partial(jax.jit, static_argnums=(1,))
+def nearest_neighbors_centroids(
+    x: np.array,
+    centroids: np.array,
+    k: int,
+    apply_pbc: Optional[Callable] = None,
+):
+    """Returns the k nearest neighbors of each centroid in point_cloud.
+
+    Args:
+        point_cloud (jnp.array): positions of all points
+        centroids (jnp.array): indices of centroid points
+        k (int): number of nearest neighbors to find
+        apply_pbc (Callable, optional): function to apply periodic boundary conditions
+
+    Returns:
+        sources, targets, distances: pairs of neighbors and their distances
+    """
+    n_centroids = centroids.shape[0]
+    n_nodes = x.shape[0]
+
+    # Select the centroid coordinates
+    centroids = x[centroids]
+
+    # Compute the vector difference between centroids and all points
+    dr = (centroids[:, None, :] - x[None, :, :]) + EPS
+    if apply_pbc:
+        dr = apply_pbc(dr, unit_cell)
+
+    # Calculate the squared distance matrix
+    distance_matrix = np.sum(dr ** 2, axis=-1)
+
+    # Get indices of nearest neighbors for each centroid
+    indices = np.argsort(distance_matrix, axis=-1)[:, :k]
+
+    # Create sources and targets arrays
+    sources = np.repeat(centroids, k)
+    targets = indices.ravel()
+
+    # Compute distances for selected pairs
+    distances = distance_matrix[np.arange(n_centroids)[:, None], indices].ravel()
+
+    return sources, targets, distances
+
+
+def ball_query(x, centroids, radius, apply_pbc):
+    """
+    Performs a ball query around each centroid.
+
+    Args:
+        x(jnp.ndarray): The entire point cloud data. Shape (N, D), where N is the number of points and D is the dimensionality.
+        centroids (jnp.ndarray): The coordinates of the centroids. Shape (M, D), where M is the number of centroids.
+        radius (float): The radius within which to search for neighbors around each centroid.
+        apply_pbc (Callable, optional): function to apply periodic boundary conditions
+
+    Returns:
+        jnp.ndarray: A list of boolean masks indicating which points are within the radius for each centroid.
+    """
+    # Compute the vector difference between positions
+    dr = (centroids[:, None, :] - x[None, :, :]) + EPS
+    if apply_pbc:
+        dr = apply_pbc(dr)
+
+    # Calculate the squared distance matrix
+    distance_matrix = np.sum(dr**2, axis=-1)
+
+    cutoff_dists = distance_matrix < radius**2
+    return cutoff_dists.T
+
+
+def update_if_mask_true(i, j, idx, sources, targets, distances, mask, distance_squared):
+    """ Update the sources, targets, and distances arrays conditionally. """
+    def true_fun(_):
+        return (
+            sources.at[idx].set(i),
+            targets.at[idx].set(j),
+            distances.at[idx].set(np.sqrt(distance_squared[i, j])),
+            idx + 1
+        )
+    
+    def false_fun(_):
+        return (sources, targets, distances, idx)
+    
+    # Conditionally update
+    return jax.lax.cond(mask[i, j], true_fun, false_fun, None)
+
+
+@partial(jax.jit, static_argnums=(1,2))
+def neighbors_within_radius(
+    x: np.array,
+    r: float,
+    apply_pbc: Optional[Callable] = None,
+):
+    """Returns the neighbors within radius r of each node in x.
+
+    Args:
+        x (jnp.array): positions of nodes
+        r (float): radial cutoff
+        mask (jnp.array, optixonal): node mask. Defaults to None.
+
+    Returns:
+        sources, targets, distances: pairs of neighbors and their distances
+    """
+    n_nodes = x.shape[0]
+    # Compute the vector difference between positions
+    dr = (x[:, None, :] - x[None, :, :]) + EPS
+    if apply_pbc:
+        dr = apply_pbc(dr)
+    # Calculate the distance matrix
+    distance_matrix = np.sum(dr**2, axis=-1)
+    # adj = distance_matrix <= r**2
+
+    # return distance_matrix, adj.astype(np.int32)
+
+    # Get adjacency matrix based on radial cutoff
+    mask = (distance_matrix <= r**2) & (distance_matrix > 0)  # Excludes self-loops
+    num_edges = np.sum(mask)
+    
+     # Initialize fixed size output arrays (pre-specify maximum possible edges)
+    max_edges =  n_nodes * (n_nodes - 1) // 2  # Maximum edges if fully connected minus diagonal
+    sources = np.zeros(max_edges, dtype=np.int32)
+    targets = np.zeros(max_edges, dtype=np.int32)
+    distances = np.zeros(max_edges, dtype=dr.dtype)
+
+    idx = 0
+    for i in range(n_nodes):
+        for j in range(i + 1, n_nodes):  # Avoid double-counting and diagonal
+            sources, targets, distances, idx = update_if_mask_true(
+                i, j, idx, sources, targets, distances, mask, distance_matrix
+            )
+
+    num_edges = idx
+    return sources[:num_edges], targets[:num_edges], distances[:num_edges], num_edges
+
+
+
+@partial(jax.jit, static_argnums=(1,))
+def compute_distances(
+    x: np.array,
+    apply_pbc: Optional[Callable] = None,
+):
+    """Returns the pairwise distances of nodes in x.
+
+    Args:
+        x (jnp.array): positions of nodes
+        mask (jnp.array, optixonal): node mask. Defaults to None.
+
+    Returns:
+        distances (jnp.array): distances between pairs of neighbors
+    """
+    n_nodes = x.shape[0]
+    dr = x[:, None, :] - x[None, :, :]
+    if apply_pbc:
+        dr = apply_pbc(dr)
+    return np.sqrt(np.sum(dr**2, axis=-1))
+
+
 def build_graph(
-    halos,
-    tpcfs,
+    node_feats,
+    global_feats,
     k,
     use_edges=True,
     apply_pbc: Optional[Callable] = None,
-    use_rbf=False,
+    n_radial_basis=4,
     sigma_num=16,
+    radius=None
 ):
-    n_batch = len(halos)
+    n_batch = len(node_feats)
+    n_nodes = node_feats.shape[1]
+    n_node = np.array([[n_nodes]] * n_batch)
 
-    sources, targets, distances = jax.vmap(
-        partial(nearest_neighbors), in_axes=(0, None, None)
-    )(halos[..., :3], k, apply_pbc,)
+    if radius is not None:
+        distances = jax.vmap(
+            partial(compute_distances), in_axes=(0, None)
+        )(node_feats[..., :3], apply_pbc)
 
+        # print(distances.shape)
+        mask = (distances < radius) & (distances > 0)  # Exclude self-distance
+        
+        sources, targets = np.where(mask)
+        distances = distances[sources, targets]
+
+        n_edge = np.array([np.sum(mask[i]) for i in range(x.shape[0])])  
+
+    else:
+        sources, targets, distances = jax.vmap(
+            partial(nearest_neighbors), in_axes=(0, None, None)
+        )(node_feats[..., :3], k, apply_pbc)
+
+        n_edge = np.array(n_batch * [[k]])
+    
     if use_edges:
         edges = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
-        if use_rbf:
-            min_sigma = np.min(edges)
-            max_sigma = np.mean(edges)
-            sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num)
-            edges = [np.exp(-(edges**2) / (2 * sigma**2)) for sigma in sigma_vals]
-            edges = np.concatenate(edges, axis=-1)
+
+        if n_radial_basis > 0:
+            edges = e3nn.bessel(edges, n_radial_basis)
+            edges = np.squeeze(edges)
+            # min_sigma = np.min(edges)
+            # max_sigma = np.mean(edges)
+            # sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num)
+            # edges = [np.exp(-(edges**2) / (2 * sigma**2)) for sigma in sigma_vals]
+            # edges = np.concatenate(edges, axis=-1)
+
+        if radius is not None:
+            edges = np.concatenate(edges, axis=0)
     else:
         edges = None
 
+
     return jraph.GraphsTuple(
-        n_node=np.array([[halos.shape[1]]] * n_batch),
-        n_edge=np.array(n_batch * [[k]]),
-        nodes=halos,
+        n_node=n_node,
+        n_edge=n_edge,
+        nodes=node_feats,
         edges=edges,
-        globals=tpcfs,
+        globals=global_feats,
         senders=sources,
         receivers=targets,
     )

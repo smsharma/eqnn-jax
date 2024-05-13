@@ -1,0 +1,46 @@
+method: grid
+parameters:
+  model:
+    value: "PointNet"
+  feats:
+    value: "pos"
+  target:
+    value: ["Omega_m", "sigma_8"]
+  learning_rate:
+    value: 0.001
+  decay:
+    value: 0.00001
+  steps:
+    value: 5000
+  batch_size:
+    values: [32]
+  n_radial_basis:
+    values: [0, 4]
+  use_tpcf:
+    value: 'none'
+  k:
+    value: 20
+  radius:
+    value: null
+  message_passing_agg:
+    values: ['mean']
+  readout_agg:
+    values: ['mean']
+  message_passing_steps:
+    values: [2, 3]
+  n_layers: 
+    values: [3]
+  d_hidden:
+    values: [128]
+  n_downsamples:
+    values: [2, 3, 4]
+  d_downsampling_factor:
+    values: [2, 5, 10]
+  k_downsample:
+    values: [10, 20]
+  r_downsample:
+    values: [0.05, 0.2]
+  combine_hierarchies_method: 
+    values: ["mean", "concat"]
+  use_edge_features:
+    values: [True]

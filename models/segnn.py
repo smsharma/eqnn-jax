@@ -318,7 +318,7 @@ class SEGNN(nn.Module):
             # Aggregate residual node features
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(
-                    f"Invalid global aggregation function {self.message_passing_agg}"
+                    f"Invalid global aggregation function {self.readout_agg}"
                 )
             # return self._decode_graph(
             #     hidden_irreps=irreps_intermediate,

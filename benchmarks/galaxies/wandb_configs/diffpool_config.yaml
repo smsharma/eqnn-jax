@@ -1,0 +1,45 @@
+method: grid
+metric:
+  goal: minimize
+  name: val_loss
+parameters:
+  model:
+    value: "DiffPool"
+  feats:
+    value: "pos"
+  target:
+    value: "Omega_m"
+  learning_rate:
+    value: 0.001
+  decay:
+    value: 0.00001
+  steps:
+    value: 5000
+  batch_size:
+    values: [32, 64]
+  use_rbf:
+    value: False
+  use_tpcf:
+    value: 'none'
+  k:
+    value: 20
+  message_passing_agg:
+    values: ['mean']
+  readout_agg:
+    values: ['mean']
+  message_passing_steps:
+    values: [2, 3, 4]
+  n_layers: 
+    values: [2, 3]
+  d_hidden:
+    values: [32, 64]
+  n_downsamples:
+    values: [2, 3]
+  d_downsampling_factor:
+    values: [5, 10]
+  k_downsample:
+    values: [10, 20]
+  combine_hierarchies_method: 
+    values: ["mean", "concat"]
+  use_edge_features:
+    values: [False, True]
