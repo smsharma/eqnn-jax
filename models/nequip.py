@@ -56,10 +56,10 @@ def get_edge_mlp_updates(
         # Radial
         R_ij = e3nn.bessel(d_ij, n_radial_basis, r_cutoff)
 
-        activation = getattr(nn, activation)
+        activation_nn = getattr(nn, activation)
         W_R_ij = MultiLayerPerceptron(
             n_layers * (d_hidden,) + (m_ij.irreps.num_irreps,),
-            activation,
+            activation_nn,
             output_activation=False,
         )(R_ij)
 
