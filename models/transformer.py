@@ -92,7 +92,7 @@ class Transformer(nn.Module):
     n_inducing_points: int = 32
     n_outputs: int = 2
     readout_agg: str = "mean"
-    mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
+    mlp_readout_widths: List[int] = (2, 1)  # Factor of d_hidden for global readout MLPs
     task: str = "graph"  # "graph" or "node"
 
     @nn.compact
@@ -128,7 +128,7 @@ class Transformer(nn.Module):
         x = nn.LayerNorm()(x)
 
         if self.task == "node":  # Node-level prediction
-            x = MLP([int(self.d_mlp * w) for w in self.mlp_readout_widths] + [self.n_outputs], activation="gelu")(x)
+            x = MLP([int(self.d_mlp * w) for w in self.mlp_readout_widths] + [self.n_outputs], activation=nn.gelu)(x)
 
         elif self.task == "graph":  # Graph-level prediction
 
@@ -141,6 +141,6 @@ class Transformer(nn.Module):
             x = aggregate_fn(x, axis=-2)  # Aggregate along seq dim; (batch, d_model)
 
             # Graph-level MLP
-            x = MLP([int(self.d_mlp * w) for w in self.mlp_readout_widths] + [self.n_outputs], activation="gelu")(x)
+            x = MLP([int(self.d_mlp * w) for w in self.mlp_readout_widths] + [self.n_outputs], activation=nn.gelu)(x)
 
         return x
