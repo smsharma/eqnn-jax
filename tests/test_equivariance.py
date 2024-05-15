@@ -8,13 +8,16 @@ import jax.numpy as jnp
 import numpy as np
 import flax.linen as nn
 import jraph
-from models.gnn import GNN
-from models.egnn import EGNN
-from models.segnn import SEGNN, TensorProductLinearGate
+
 from e3nn_jax import IrrepsArray
 from e3nn_jax import Irreps
 from utils.graph_utils import nearest_neighbors, rotate_representation
 from utils.equivariant_graph_utils import get_equivariant_graph
+
+from models.gnn import GNN
+from models.egnn import EGNN
+from models.segnn import SEGNN, TensorProductLinearGate
+from models.nequip import NequIP
 
 import pytest
 
@@ -32,6 +35,7 @@ def create_dummy_graph(
     node_features,
     k,
     use_irreps=False,
+    use_irreps_but_not_steerable=False,
 ):
     sources, targets, d = jax.vmap(nearest_neighbors, in_axes=(0, None))(
         node_features[..., :3], k
@@ -58,7 +62,7 @@ def create_dummy_graph(
             additional_messages=additional_messages,
         )
     else:
-        nodes = node_features
+        nodes = IrrepsArray("1o + 1o + 1x0e", node_features) if use_irreps_but_not_steerable else node_features
         edges = None
         return jraph.GraphsTuple(
             n_node=n_node,
@@ -69,6 +73,10 @@ def create_dummy_graph(
             senders=sources,
             receivers=targets,
         )
+    
+#####################
+# Fixtures
+#####################
 
 @pytest.fixture
 def node_features():
@@ -87,6 +95,7 @@ def transform_graph(
     nodes,
     k=5,
     use_irreps=False,
+    use_irreps_but_not_steerable=False,
 ):
     nodes = apply_transformation(
         nodes,
@@ -95,22 +104,30 @@ def transform_graph(
         node_features=nodes,
         k=k,
         use_irreps=use_irreps,
+        use_irreps_but_not_steerable=use_irreps_but_not_steerable,
     )
 
 
 def is_model_equivariant(
-    data, model, params, should_be_equivariant=True, use_irreps=False, rtol=0.05
+    data, model, params, should_be_equivariant=True, use_irreps=False, use_irreps_but_not_steerable=False, rtol=0.05
 ):
+    
+    if use_irreps or use_irreps_but_not_steerable:
+        nodes = data.nodes.array
+    else:
+        nodes = data.nodes
+
     transformed_data = transform_graph(
-        data.nodes if not use_irreps else data.nodes.array,
+        nodes,
         use_irreps=use_irreps,
+        use_irreps_but_not_steerable=use_irreps_but_not_steerable,
     )
     output_original = model.apply(params, data).nodes
     output_transformed = model.apply(params, transformed_data).nodes
     output_original_transformed = apply_transformation(
-        output_original if not use_irreps else output_original.array
+        output_original if not (use_irreps or use_irreps_but_not_steerable) else output_original.array
     )
-    if use_irreps:
+    if use_irreps or use_irreps_but_not_steerable:
         output_original = output_original.array
         output_transformed = output_transformed.array
     # Make sure output original sufficiently different from output transformed
@@ -128,11 +145,18 @@ def is_model_equivariant(
 
 
 def is_model_invariant(
-    data, model, params, should_be_invariant=True, use_irreps=False, rtol=0.05
+    data, model, params, should_be_invariant=True, use_irreps=False, use_irreps_but_not_steerable=False, rtol=0.05
 ):
+    
+    if use_irreps or use_irreps_but_not_steerable:
+        nodes = data.nodes.array
+    else:
+        nodes = data.nodes
+
     transformed_data = transform_graph(
-        data.nodes if not use_irreps else data.nodes.array,
+        nodes,
         use_irreps=use_irreps,
+        use_irreps_but_not_steerable=use_irreps_but_not_steerable,
     )
     output_original = model.apply(params, data)
     output_transformed = model.apply(params, transformed_data)
@@ -310,4 +334,57 @@ def test_invariant_segnn(node_features):
         model,
         params,
         use_irreps=True,
+    )
+
+def test_equivariant_nequip(node_features):
+    dummy_graph = create_dummy_graph(
+        node_features=node_features,
+        k=5,
+        use_irreps=False,
+        use_irreps_but_not_steerable=True,
+    )
+    model = GraphWrapper(
+        NequIP(
+            num_message_passing_steps=2,
+            d_hidden=32,
+            n_layers=3,
+            task="node",
+            irreps_out="1o + 1o + 1x0e",
+        )
+    )
+    rng = jax.random.PRNGKey(0)
+
+    params = model.init(rng, dummy_graph)
+    is_model_equivariant(
+        dummy_graph,
+        model,
+        params,
+        use_irreps=False,
+        use_irreps_but_not_steerable=True,
+    )
+
+def test_invariant_nequip(node_features):
+    dummy_graph = create_dummy_graph(
+        node_features=node_features,
+        k=5,
+        use_irreps=False,
+        use_irreps_but_not_steerable=True,
+    )
+    model = GraphWrapper(
+        NequIP(
+            num_message_passing_steps=2,
+            d_hidden=32,
+            n_layers=3,
+            task="graph",
+            irreps_out="1x0e",
+        )
+    )
+    rng = jax.random.PRNGKey(0)
+    params = model.init(rng, dummy_graph)
+    is_model_invariant(
+        dummy_graph,
+        model,
+        params,
+        use_irreps=False,
+        use_irreps_but_not_steerable=True,
     )

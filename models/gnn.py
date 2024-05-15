@@ -4,7 +4,6 @@ import jax.numpy as jnp
 import jraph
 from jraph._src import utils
 
-# from utils.graph_utils import fourier_features
 from models.mlp import MLP
 
 
@@ -36,7 +35,6 @@ def get_node_mlp_updates(d_hidden, n_layers, activation):
         Returns:
             jnp.ndarray: updated node features
         """
-        # softmax over recievers
 
         if received_attributes is not None:
             inputs = jnp.concatenate([nodes, received_attributes], axis=1)
@@ -86,6 +84,13 @@ def get_edge_mlp_updates(d_hidden, n_layers, activation) -> Callable:
     return update_fn
 
 
+class Identity(nn.Module):
+    """Identity module"""
+    @nn.compact
+    def __call__(self, x):
+        return x
+
+
 class GNN(nn.Module):
     """Standard Graph Neural Network"""
 
@@ -107,7 +112,7 @@ class GNN(nn.Module):
 
     @nn.compact
     def __call__(self, graphs: jraph.GraphsTuple) -> jraph.GraphsTuple:
-        """Apply equivariant graph convolutional layers to graph
+        """Apply graph convolutional layers to graph
 
         Args:
             graphs (jraph.GraphsTuple): Input graph
@@ -116,10 +121,6 @@ class GNN(nn.Module):
             jraph.GraphsTuple: Updated graph
         """
         processed_graphs = graphs
-        # if processed_graphs.globals is not None:
-        #     processed_graphs = processed_graphs._replace(
-        #         globals=processed_graphs.globals.reshape(1, -1)
-        #     )
 
         activation = getattr(nn, self.activation)
 
@@ -142,7 +143,7 @@ class GNN(nn.Module):
                 self.d_hidden, self.n_layers, activation
             )
 
-            # Instantiate graph network and apply EGCL
+            # Instantiate graph network and apply GCL
             graph_net = jraph.GraphNetwork(
                 update_node_fn=update_node_fn, 
                 update_edge_fn=update_edge_fn,
