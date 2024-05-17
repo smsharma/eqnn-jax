@@ -320,11 +320,7 @@ class SEGNN(nn.Module):
                 raise ValueError(
                     f"Invalid global aggregation function {self.readout_agg}"
                 )
-            # return self._decode_graph(
-            #     hidden_irreps=irreps_intermediate,
-            #     graph=graphs,
-            #     steerable_node_attrs=steerable_node_attrs,
-            # )
+
             # Steerable linear layer conditioned on node attributes; output scalars for invariant readout
             irreps_pre_pool = Irreps(f"{self.d_hidden}x0e")
             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")

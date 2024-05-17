@@ -19,7 +19,7 @@ def get_apply_pbc(std: np.array=None, cell: np.array = np.array(
 ):
     if std is not None:
         cell = cell / std[:3]
-        cell -= 0.5 / std[:3]
+        # cell -= 0.5 / std[:3]
 
     def apply_pbc(
         dr: np.array,
@@ -235,7 +235,7 @@ def build_graph(
     k,
     use_edges=True,
     apply_pbc: Optional[Callable] = None,
-    n_radial_basis=4,
+    n_radial_basis=0,
     sigma_num=16,
     radius=None
 ):
