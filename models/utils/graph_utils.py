@@ -237,7 +237,7 @@ def build_graph(
     apply_pbc: Optional[Callable] = None,
     n_radial_basis=0,
     sigma_num=16,
-    radius=None
+    radius=None,
 ):
     n_batch = len(node_feats)
     n_nodes = node_feats.shape[1]
@@ -279,7 +279,6 @@ def build_graph(
             edges = np.concatenate(edges, axis=0)
     else:
         edges = None
-
 
     return jraph.GraphsTuple(
         n_node=n_node,

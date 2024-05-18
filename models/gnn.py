@@ -107,6 +107,7 @@ class GNN(nn.Module):
     readout_only_positions: bool = False  # Graph-level readout only uses positions
     n_outputs: int = 1  # Number of outputs for graph-level readout
     norm: str = "layer"
+    position_features: bool = True  # Use absolute positions as node features
 
     # normalize edge aggregation
 
@@ -132,6 +133,10 @@ class GNN(nn.Module):
         aggregate_edges_for_nodes_fn = getattr(
             utils, f"segment_{self.message_passing_agg}"
         )
+        if not self.position_features:
+            processed_graphs = processed_graphs._replace(
+                    nodes=processed_graphs.nodes[..., 3:],
+                    )
 
         # Apply message-passing rounds
         for _ in range(self.message_passing_steps):
@@ -160,14 +165,11 @@ class GNN(nn.Module):
             processed_graphs = processed_graphs._replace(
                 nodes=norm(processed_graphs.nodes), edges=norm(processed_graphs.edges)
             )
-        # node_reps = processed_graphs
 
-        if self.readout_agg not in ["sum", "mean", "max"]:
+        if self.readout_agg not in ["sum", "mean", "max", "attn"]:
             raise ValueError(
-                f"Invalid global aggregation function {self.message_passing_agg}"
+                f"Invalid global aggregation function {self.readout_agg}"
             )
-
-        readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
 
         if self.task == "node":
             if self.d_output is not None:
@@ -183,9 +185,15 @@ class GNN(nn.Module):
         elif self.task == "graph":
             # Aggregate residual node features; only use positions, optionally
             if self.readout_only_positions:
+                readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
                 agg_nodes = readout_agg_fn(processed_graphs.nodes[:, :3], axis=0)
             else:
-                agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
+                if self.readout_agg == "attn":
+                    q_agg = self.param("q_qgg", nn.initializers.xavier_uniform(), (1, processed_graphs.nodes.shape[-1]))
+                    agg_nodes = nn.MultiHeadDotProductAttention(num_heads=2,)(q_agg, processed_graphs.nodes,)[0, :]
+                else:
+                    readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
+                    agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
 
                 
             if processed_graphs.globals is not None:

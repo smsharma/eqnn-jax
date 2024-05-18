@@ -85,14 +85,14 @@ class Transformer(nn.Module):
     """
 
     d_model: int = 128
-    d_mlp: int = 512
-    n_layers: int = 4
+    d_mlp: int = 1024
+    n_layers: int = 6
     n_heads: int = 4
     induced_attention: bool = False
     n_inducing_points: int = 32
     n_outputs: int = 2
     readout_agg: str = "mean"
-    mlp_readout_widths: List[int] = (2, 1)  # Factor of d_hidden for global readout MLPs
+    mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "graph"  # "graph" or "node"
 
     @nn.compact
@@ -132,13 +132,19 @@ class Transformer(nn.Module):
 
         elif self.task == "graph":  # Graph-level prediction
 
-            if self.readout_agg not in ["sum", "mean", "max"]:
+            if self.readout_agg not in ["sum", "mean", "max", "attn"]:
                 raise ValueError(
                     f"Invalid message passing aggregation function {self.message_passing_agg}"
                 )
 
-            aggregate_fn = getattr(np, self.readout_agg)
-            x = aggregate_fn(x, axis=-2)  # Aggregate along seq dim; (batch, d_model)
+            if self.readout_agg == "attn":
+                q_agg = self.param("q_qgg", nn.initializers.xavier_uniform(), (1, self.d_model))
+                # Repeat q_qgg along batch dim
+                q_agg = np.repeat(q_agg, x.shape[0], axis=0)[:, None, :]
+                x = nn.MultiHeadDotProductAttention(num_heads=self.n_heads,)(q_agg, x, mask=mask)[:, 0, :]
+            else:
+                aggregate_fn = getattr(np, self.readout_agg)
+                x = aggregate_fn(x, axis=-2)  # Aggregate along seq dim; (batch, d_model)
 
             # Graph-level MLP
             x = MLP([int(self.d_mlp * w) for w in self.mlp_readout_widths] + [self.n_outputs], activation=nn.gelu)(x)
