@@ -104,7 +104,6 @@ class GNN(nn.Module):
     readout_agg: str = "mean"
     mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "graph"  # "graph" or "node"
-    readout_only_positions: bool = False  # Graph-level readout only uses positions
     n_outputs: int = 1  # Number of outputs for graph-level readout
     norm: str = "layer"
     position_features: bool = True  # Use absolute positions as node features
@@ -182,22 +181,17 @@ class GNN(nn.Module):
                 )
             return processed_graphs
 
-        elif self.task == "graph":
-            # Aggregate residual node features; only use positions, optionally
-            if self.readout_only_positions:
-                readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-                agg_nodes = readout_agg_fn(processed_graphs.nodes[:, :3], axis=0)
+        elif self.task == "graph":  # Aggregate residual node features
+            
+            if self.readout_agg == "attn":
+                q_agg = self.param("q_qgg", nn.initializers.xavier_uniform(), (1, processed_graphs.nodes.shape[-1]))
+                agg_nodes = nn.MultiHeadDotProductAttention(num_heads=2,)(q_agg, processed_graphs.nodes,)[0, :]
             else:
-                if self.readout_agg == "attn":
-                    q_agg = self.param("q_qgg", nn.initializers.xavier_uniform(), (1, processed_graphs.nodes.shape[-1]))
-                    agg_nodes = nn.MultiHeadDotProductAttention(num_heads=2,)(q_agg, processed_graphs.nodes,)[0, :]
-                else:
-                    readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-                    agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
+                readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
+                agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
 
-                
             if processed_graphs.globals is not None:
-                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
+                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) # Use tpcf
                 
                 norm = nn.LayerNorm()
                 agg_nodes = norm(agg_nodes)

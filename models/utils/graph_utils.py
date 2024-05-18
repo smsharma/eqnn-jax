@@ -236,8 +236,9 @@ def build_graph(
     use_edges=True,
     apply_pbc: Optional[Callable] = None,
     n_radial_basis=0,
-    sigma_num=16,
+    r_max=1.,
     radius=None,
+    use_3d_distances=False,
 ):
     n_batch = len(node_feats)
     n_nodes = node_feats.shape[1]
@@ -264,16 +265,18 @@ def build_graph(
         n_edge = np.array(n_batch * [[k]])
     
     if use_edges:
-        edges = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
+        if use_3d_distances:
+            edges = distances
+        else:
+            edges = np.sqrt(np.sum(distances ** 2, axis=-1, keepdims=True))
 
         if n_radial_basis > 0:
-            edges = e3nn.bessel(edges, n_radial_basis)
+            edges = e3nn.bessel(edges, n=n_radial_basis, x_max=r_max)
             edges = np.squeeze(edges)
-            # min_sigma = np.min(edges)
-            # max_sigma = np.mean(edges)
-            # sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num)
-            # edges = [np.exp(-(edges**2) / (2 * sigma**2)) for sigma in sigma_vals]
-            # edges = np.concatenate(edges, axis=-1)
+
+        # Concat last 2 dims if use_3d_distances
+        if use_3d_distances:
+            edges = edges.reshape(edges.shape[0], edges.shape[1], -1)
 
         if radius is not None:
             edges = np.concatenate(edges, axis=0)
