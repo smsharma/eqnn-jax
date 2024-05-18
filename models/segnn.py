@@ -198,79 +198,36 @@ class SEGNN(nn.Module):
         graph = graph._replace(nodes=nodes)
         return graph
 
-    def pooling(
-        self,
-        graph: jraph.GraphsTuple,
-        aggregate_fn: Callable = jraph.segment_sum,
-    ) -> e3nn.IrrepsArray:
-        """Pools over graph nodes with the specified aggregation.
-
-        Args:
-            graph: Input graph
-            aggregate_fn: function used to update pool over the nodes
-
-        Returns:
-            The pooled graph nodes.
-        """
-        return e3nn.IrrepsArray(
-            graph.nodes.irreps, aggregate_fn(graph.nodes.array, axis=0)
-        )
-
-    def _decode_graph(
-        self, hidden_irreps: e3nn.Irreps, graph: jraph.GraphsTuple, steerable_node_attrs
-    ):
-        nodes = TensorProductLinearGate(hidden_irreps, activation=False)(
-            graph.nodes, steerable_node_attrs
-        )
-        pool_fn = getattr(jnp, f"{self.readout_agg}")
-        nodes = self.pooling(graph._replace(nodes=nodes), aggregate_fn=pool_fn)
-        # post pool mlp (not steerable)
-        for _ in range(self.num_blocks):
-            nodes = TensorProductLinearGate(
-                hidden_irreps,
-                activation=True,
-                scalar_activation=self.scalar_activation,
-                gate_activation=self.gate_activation,
-            )(
-                nodes,
-            )
-        nodes = TensorProductLinearGate(
-            self.output_irreps,
-            activation=False,
-        )(nodes)
-        return nodes.array
-
     @nn.compact
     def __call__(
         self,
         st_graphs: SteerableGraphsTuple,
     ) -> jraph.GraphsTuple:
+        
         if self.hidden_irreps is None:
-            hidden_irreps = balanced_irreps(
-                lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True
-            )  # For hidden features
+            hidden_irreps = balanced_irreps(lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True)  # For hidden features
         else:
             hidden_irreps = self.hidden_irreps
+
         irreps_in = st_graphs.nodes.irreps  # Input irreps
-        output_irreps = (
-            self.output_irreps if self.output_irreps is not None else irreps_in
-        )  # Output irreps desired, if different from input irreps
+        output_irreps = self.output_irreps if self.output_irreps is not None else irreps_in  # Output irreps desired, if different from input irreps
+
         additional_messages = st_graphs.additional_messages
         steerable_node_attrs = st_graphs.steerable_node_attrs
         steerable_edge_attrs = st_graphs.steerable_edge_attrs
         graphs, _ = wrap_graph_tuple(st_graphs)
-        # Compute irreps
+
         # If specified, use hidden irreps between message passing steps; otherwise, use input irreps (bottleneck and fewer parameters)
-        irreps_intermediate = (
-            hidden_irreps if self.intermediate_hidden_irreps else irreps_in
-        )
+        irreps_intermediate = hidden_irreps if self.intermediate_hidden_irreps else irreps_in
+
         # Neighborhood aggregation function
-        aggregate_edges_for_nodes_fn = getattr(
-            utils, f"segment_{self.message_passing_agg}"
-        )
+        aggregate_edges_for_nodes_fn = getattr(utils, f"segment_{self.message_passing_agg}")
+
         graphs = self._embed(irreps_intermediate, graphs, steerable_node_attrs)
-        # Message passing rounds
+
+        # Apply message-passing rounds
         for _ in range(self.num_message_passing_steps):
+
             update_edge_fn = get_edge_mlp_updates(
                 output_irreps=hidden_irreps,
                 n_layers=self.num_blocks,
@@ -288,25 +245,24 @@ class SEGNN(nn.Module):
                 scalar_activation=self.scalar_activation,
                 gate_activation=self.gate_activation,
             )
-            # Apply steerable EGCL
+
+            # Instantiate graph network and apply steerable EGCL
             graph_net = jraph.GraphNetwork(
                 update_node_fn=update_node_fn,
                 update_edge_fn=update_edge_fn,
                 aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn,
             )
             processed_graphs = graph_net(graphs)
+
             # Skip connection
             if self.residual:
-                graphs = processed_graphs._replace(
-                    nodes=processed_graphs.nodes + graphs.nodes
-                )
+                graphs = processed_graphs._replace(nodes=processed_graphs.nodes + graphs.nodes)
             else:
                 graphs = processed_graphs
 
-        # Check dims of hidden irreps
+            # print(graphs.nodes.array.std())
 
-        if self.task == "node":
-            # If output irreps differ from input irreps, project to output irreps
+        if self.task == "node":  # If output irreps differ from input irreps, project to output irreps
             if output_irreps != irreps_in:
                 graphs = self._decode(
                     hidden_irreps=irreps_intermediate,
@@ -314,8 +270,8 @@ class SEGNN(nn.Module):
                     steerable_node_attrs=steerable_node_attrs,
                 )
             return graphs
-        elif self.task == "graph":
-            # Aggregate residual node features
+        elif self.task == "graph":  # Aggregate residual node features
+            
             if self.readout_agg not in ["sum", "mean", "max"]:
                 raise ValueError(
                     f"Invalid global aggregation function {self.readout_agg}"
@@ -332,7 +288,7 @@ class SEGNN(nn.Module):
             agg_nodes = readout_agg_fn(nodes_pre_pool, axis=0)
 
             if processed_graphs.globals is not None:
-                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
+                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) # Use tpcf
                 
                 norm = nn.LayerNorm()
                 agg_nodes = norm(agg_nodes)

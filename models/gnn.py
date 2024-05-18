@@ -153,7 +153,6 @@ class GNN(nn.Module):
                 update_edge_fn=update_edge_fn,
                 aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn
             )
-
             processed_graphs = graph_net(processed_graphs)
 
             # Optional normalization

@@ -39,6 +39,8 @@ def get_equivariant_graph(
     steerable_velocities: bool = False,
     spherical_harmonics_norm="integral",
     apply_pbc: Optional[Callable] = None,
+    n_radial_basis: int = 0,
+    r_max: float = 1.0,
 ):
     attribute_irreps = e3nn.Irreps.spherical_harmonics(lmax_attributes)
     x_i = positions[jnp.arange(positions.shape[0])[:, None], senders, :]
@@ -48,7 +50,7 @@ def get_equivariant_graph(
         r_ij = apply_pbc(r_ij,)
     else:
         r_ij = (x_i - x_j).array
-    # print(r_ij)
+
     r_ij = IrrepsArray("1o", r_ij)
 
     steerable_edge_attrs = e3nn.spherical_harmonics(
@@ -57,8 +59,6 @@ def get_equivariant_graph(
         normalize=True,
         normalization=spherical_harmonics_norm,
     )  # check histograms of a single graphs
-
-    # print(f'steerable_edge_attrs Mean: {jnp.mean(steerable_edge_attrs.array, axis=(0,1))} Std: {jnp.std(steerable_edge_attrs.array, axis=(0,1))}')
 
     # TODO: clean this up (should the entire function be part of vmap?)
     def scatter_mean_wrapper(steerable_edge_attrs, receivers, output_size):
@@ -73,8 +73,6 @@ def get_equivariant_graph(
         positions.shape[1],
     )
 
-    # print(f'steerable_node_attrs Mean: {jnp.mean(steerable_node_attrs.array, axis=(0,1))} Std: {jnp.std(steerable_node_attrs.array, axis=(0,1))}')
-
     if steerable_velocities:
         vel_sph = e3nn.spherical_harmonics(
             attribute_irreps,
@@ -83,19 +81,13 @@ def get_equivariant_graph(
             normalization=spherical_harmonics_norm,
         )
         steerable_node_attrs += vel_sph
-
-    additional_messages = e3nn.IrrepsArray(
-        "1x0e", jnp.sqrt(jnp.sum(r_ij.array**2, axis=-1, keepdims=True))
-    )
-
-    # print(f'additional_messages Mean: {jnp.mean(additional_messages.array, axis=0)} Std: {jnp.std(additional_messages.array, axis=0)}')
-    # print('additional_messages shape:', additional_messages.array.shape)
-
-    # print(
-    #     f"node_features Mean: {jnp.mean(node_features.array, axis=(0,1))} Std: {jnp.std(node_features.array, axis=(0,1))}"
-    # )
-    # print("Node features:")
-    # print(node_features)
+    
+    if n_radial_basis > 0:
+        distances = jnp.sqrt(jnp.sum(r_ij.array ** 2, axis=-1))
+        distances = e3nn.bessel(distances, n=n_radial_basis, x_max=r_max)
+        additional_messages = e3nn.IrrepsArray(f"{n_radial_basis}x0e", distances)
+    else:
+        additional_messages = e3nn.IrrepsArray("1x0e", jnp.sqrt(jnp.sum(r_ij.array ** 2, axis=-1, keepdims=True)))
 
     return SteerableGraphsTuple(
         nodes=node_features,
