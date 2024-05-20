@@ -71,10 +71,15 @@ def get_node_mlp_updates(
     gate_activation: str = "sigmoid",
 ):
     def update_fn(
-        nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
+        nodes: jnp.array, 
+        senders: jnp.array, 
+        receivers: jnp.array, 
+        globals: jnp.array
     ) -> jnp.array:
-        m_i = receivers
-        m_i = e3nn.concatenate([m_i, nodes], axis=-1)  # Eq. 8 of 2110.02905
+        m_i = nodes
+        if receivers is not None:
+            m_i = e3nn.concatenate([m_i, receivers], axis=-1)  # Eq. 8 of 2110.02905
+        
         # Gated tensor product steered by geometric feature messages
         for _ in range(n_layers - 1):
             nodes = TensorProductLinearGate(
@@ -98,12 +103,16 @@ def get_edge_mlp_updates(
     gate_activation: str = "sigmoid",
 ):
     def update_fn(
-        edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
+        edges: jnp.array, 
+        senders: jnp.array, 
+        receivers: jnp.array, 
+        globals: jnp.array
     ) -> jnp.array:
-        to_concat = [senders, receivers]
         if additional_messages is not None:
-            to_concat.append(additional_messages)
-        m_ij = e3nn.concatenate(to_concat, axis=-1)  # Messages
+            m_ij = e3nn.concatenate([additional_messages, senders, receivers], axis=-1)
+        else:
+            m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
+
         # Gated tensor product steered by geometric features attributes
         for _ in range(n_layers - 1):
             m_ij = TensorProductLinearGate(
