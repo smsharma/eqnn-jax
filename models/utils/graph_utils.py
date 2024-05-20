@@ -249,23 +249,6 @@ def get_invariant_edges(pos, sources, targets, distances):
         [distances_norm, alpha[..., None], beta[...,None]], axis=-1
     )
 
-
-    #centroid_neighbours = np.mean()
-    #delta_sources = pos_sources 
-    #delta_sources /= np.linalg.norm(delta_sources, axis=-1, keepdims=True)
-    #delta_targets = pos_targets
-    #delta_targets /= np.linalg.norm(delta_targets, axis=-1, keepdims=True)
-    #print('sources = ', pos_sources[1,:10])
-    #print('targets = ', pos_targets[1,:10])
-
-    #alpha = np.einsum('ijk,ijk->ij', delta_sources, delta_targets)
-    #print('alpha = ', alpha[1,:10])
-    #distance_modulus = np.linalg.norm(distances, axis=-1, keepdims=True)
-    #beta = np.einsum('ijk,ijk->ij', delta_sources,  distances / distance_modulus,)
-    #return np.concatenate([distance_modulus, alpha[...,None], beta[...,None]], axis=-1)
-    #return distances
-
-
 def build_graph(
     node_feats,
     global_feats,
