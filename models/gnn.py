@@ -94,21 +94,17 @@ class Identity(nn.Module):
 class GNN(nn.Module):
     """Standard Graph Neural Network"""
 
-    # Attributes for all MLPs
-    message_passing_steps: int = 3
     d_hidden: int = 64
-    d_output: Optional[int] = None
     n_layers: int = 3
-    activation: str = "gelu"
+    message_passing_steps: int = 3
     message_passing_agg: str = "sum"  # "sum", "mean", "max"
-    readout_agg: str = "mean"
-    mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
+    activation: str = "gelu"
+    norm: str = "layer"
     task: str = "graph"  # "graph" or "node"
     n_outputs: int = 1  # Number of outputs for graph-level readout
-    norm: str = "layer"
+    readout_agg: str = "mean"
+    mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
     position_features: bool = True  # Use absolute positions as node features
-
-    # normalize edge aggregation
 
     @nn.compact
     def __call__(self, graphs: jraph.GraphsTuple) -> jraph.GraphsTuple:
@@ -136,6 +132,11 @@ class GNN(nn.Module):
             processed_graphs = processed_graphs._replace(
                     nodes=processed_graphs.nodes[..., 3:],
                     )
+            
+        # Project node features into d_hidden
+        processed_graphs = processed_graphs._replace(
+            nodes=nn.Dense(self.d_hidden)(processed_graphs.nodes)
+        )
 
         # Apply message-passing rounds
         for _ in range(self.message_passing_steps):
@@ -172,7 +173,7 @@ class GNN(nn.Module):
         if self.task == "node":
             if self.d_output is not None:
                 nodes = MLP(
-                    [self.d_hidden] * (self.n_layers - 1) + [self.d_output],
+                    [self.d_hidden] * (self.n_layers - 1) + [self.n_outputs],
                     activation=activation,
                 )(processed_graphs.nodes)
                 processed_graphs = processed_graphs._replace(
