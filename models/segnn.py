@@ -63,53 +63,23 @@ class TensorProductLinearGate(nn.Module):
             )  # Default activations
         return out
 
-
-def get_edge_mlp_updates(
-    output_irreps: Irreps = None,
-    n_layers: int = 2,
-    steerable_edge_attrs: Optional[Irreps] = None,
-    additional_messages: Optional[jnp.array] = None,
-    scalar_activation: str = "silu",
-    gate_activation: str = "sigmoid",
-):
-    def update_fn(
-        edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
-    ) -> jnp.array:
-        to_concat = [senders, receivers]
-        if additional_messages is not None:
-            to_concat.append(additional_messages)
-        m_ij = e3nn.concatenate(to_concat, axis=-1)  # Messages
-        # Gated tensor product steered by geometric features attributes
-        for _ in range(n_layers - 1):
-            m_ij = TensorProductLinearGate(
-                output_irreps,
-                scalar_activation=scalar_activation,
-                gate_activation=gate_activation,
-            )(m_ij, steerable_edge_attrs)
-        m_ij = TensorProductLinearGate(output_irreps, activation=False)(
-            m_ij, steerable_edge_attrs
-        )  # No activation
-        return m_ij
-
-    return update_fn
-
-
 def get_node_mlp_updates(
     output_irreps: Irreps = None,
     n_layers: int = 2,
-    n_edges: int = 1,
-    normalize_messages: bool = True,
     steerable_node_attrs: Optional[Irreps] = None,
     scalar_activation: str = "silu",
     gate_activation: str = "sigmoid",
 ):
     def update_fn(
-        nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
+        nodes: jnp.array, 
+        senders: jnp.array, 
+        receivers: jnp.array, 
+        globals: jnp.array
     ) -> jnp.array:
-        m_i = receivers
-        if normalize_messages:
-            m_i /= n_edges - 1
-        m_i = e3nn.concatenate([m_i, nodes], axis=-1)  # Eq. 8 of 2110.02905
+        m_i = nodes
+        if receivers is not None:
+            m_i = e3nn.concatenate([m_i, receivers], axis=-1)  # Eq. 8 of 2110.02905
+        
         # Gated tensor product steered by geometric feature messages
         for _ in range(n_layers - 1):
             nodes = TensorProductLinearGate(
@@ -124,6 +94,38 @@ def get_node_mlp_updates(
 
     return update_fn
 
+def get_edge_mlp_updates(
+    output_irreps: Irreps = None,
+    n_layers: int = 2,
+    steerable_edge_attrs: Optional[Irreps] = None,
+    additional_messages: Optional[jnp.array] = None,
+    scalar_activation: str = "silu",
+    gate_activation: str = "sigmoid",
+):
+    def update_fn(
+        edges: jnp.array, 
+        senders: jnp.array, 
+        receivers: jnp.array, 
+        globals: jnp.array
+    ) -> jnp.array:
+        if additional_messages is not None:
+            m_ij = e3nn.concatenate([additional_messages, senders, receivers], axis=-1)
+        else:
+            m_ij = e3nn.concatenate([senders, receivers], axis=-1)  # Messages
+
+        # Gated tensor product steered by geometric features attributes
+        for _ in range(n_layers - 1):
+            m_ij = TensorProductLinearGate(
+                output_irreps,
+                scalar_activation=scalar_activation,
+                gate_activation=gate_activation,
+            )(m_ij, steerable_edge_attrs)
+        m_ij = TensorProductLinearGate(output_irreps, activation=False)(
+            m_ij, steerable_edge_attrs
+        )  # No activation
+        return m_ij
+
+    return update_fn
 
 def wrap_graph_tuple(graph):
     """Remove additional attributes from the graph tuple."""
@@ -146,26 +148,21 @@ def wrap_graph_tuple(graph):
 
 
 class SEGNN(nn.Module):
+
     d_hidden: int = 64  # Hidden dimension
-    l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
-    output_irreps: Optional[Irreps] = (
-        None  # Output irreps for node-wise task; defaults to input irreps
-    )
-    hidden_irreps: Optional[Irreps] = None
-    normalize_messages: bool = True  # Normalize messages by number of edges
-    num_message_passing_steps: int = 3  # Number of message passing steps
-    num_blocks: int = 3  # Number of gated tensor products in each message passing step
-    residual: bool = True  # Residual connections
+    n_layers: int = 3  # Number of gated tensor products in each message passing step
+    message_passing_steps: int = 3  # Number of message passing steps
     message_passing_agg: str = "sum"  # "sum", "mean", "max"
-    readout_agg: str = "mean"  # "sum", "mean", "max"
-    mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
-    task: str = "node"  # "graph" or "node"
-    intermediate_hidden_irreps: bool = (
-        True  # Use hidden irreps for intermediate message passing steps; otherwise use input irreps
-    )
-    scalar_activation: str = "silu"  # Activation function for scalars
+    scalar_activation: str = "gelu"  # Activation function for scalars
     gate_activation: str = "sigmoid"  # Activation function for gate scalars
-    n_outputs: int = 1
+    task: str = "graph"  # "graph" or "node"
+    d_output: int = 1
+    output_irreps: Optional[Irreps] = None  # Output irreps for node-wise task; defaults to input irreps
+    readout_agg: str = "mean"  # "sum", "mean", "max"
+    mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
+    l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
+    hidden_irreps: Optional[Irreps] = None
+    residual: bool = True  # Residual connections
 
     def _embed(
         self,
@@ -183,7 +180,7 @@ class SEGNN(nn.Module):
         self, hidden_irreps: e3nn.Irreps, graph: jraph.GraphsTuple, steerable_node_attrs
     ):
         nodes = graph.nodes
-        for _ in range(self.num_blocks):
+        for _ in range(self.n_layers):
             nodes = TensorProductLinearGate(
                 hidden_irreps,
                 activation=True,
@@ -217,30 +214,25 @@ class SEGNN(nn.Module):
         steerable_edge_attrs = st_graphs.steerable_edge_attrs
         graphs, _ = wrap_graph_tuple(st_graphs)
 
-        # If specified, use hidden irreps between message passing steps; otherwise, use input irreps (bottleneck and fewer parameters)
-        irreps_intermediate = hidden_irreps if self.intermediate_hidden_irreps else irreps_in
-
         # Neighborhood aggregation function
         aggregate_edges_for_nodes_fn = getattr(utils, f"segment_{self.message_passing_agg}")
 
-        graphs = self._embed(irreps_intermediate, graphs, steerable_node_attrs)
+        graphs = self._embed(hidden_irreps, graphs, steerable_node_attrs)
 
         # Apply message-passing rounds
-        for _ in range(self.num_message_passing_steps):
+        for _ in range(self.message_passing_steps):
 
             update_edge_fn = get_edge_mlp_updates(
                 output_irreps=hidden_irreps,
-                n_layers=self.num_blocks,
+                n_layers=self.n_layers,
                 steerable_edge_attrs=steerable_edge_attrs,
                 additional_messages=additional_messages,
                 scalar_activation=self.scalar_activation,
                 gate_activation=self.gate_activation,
             )
             update_node_fn = get_node_mlp_updates(
-                output_irreps=irreps_intermediate,  # Node update outputs to `irreps_intermediate`
-                n_layers=self.num_blocks,
-                normalize_messages=self.normalize_messages,
-                n_edges=graphs.n_edge,
+                output_irreps=hidden_irreps,
+                n_layers=self.n_layers,
                 steerable_node_attrs=steerable_node_attrs,
                 scalar_activation=self.scalar_activation,
                 gate_activation=self.gate_activation,
@@ -265,7 +257,7 @@ class SEGNN(nn.Module):
         if self.task == "node":  # If output irreps differ from input irreps, project to output irreps
             if output_irreps != irreps_in:
                 graphs = self._decode(
-                    hidden_irreps=irreps_intermediate,
+                    hidden_irreps=hidden_irreps,
                     graph=graphs,
                     steerable_node_attrs=steerable_node_attrs,
                 )
@@ -297,7 +289,7 @@ class SEGNN(nn.Module):
             mlp = MLP([
                 self.mlp_readout_widths[0] * agg_nodes.shape[-1]] + \
                 [w * self.d_hidden for w in self.mlp_readout_widths[1:]] + \
-                [self.n_outputs,]
+                [self.d_output,]
             )                                                                        
             out = mlp(agg_nodes)                                                             
             return out
