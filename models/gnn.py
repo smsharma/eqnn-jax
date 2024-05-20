@@ -124,10 +124,11 @@ class GNN(nn.Module):
                     nodes=graphs.nodes[..., 3:],
                     )
             
-        # Project node features into d_hidden
-        graphs = graphs._replace(
-            nodes=nn.Dense(self.d_hidden)(graphs.nodes)
-        )
+        # Project node features into d_hidden, if not just using positions
+        if self.position_features:
+            graphs = graphs._replace(
+                nodes=nn.Dense(self.d_hidden)(graphs.nodes)
+            )
 
         # Apply message-passing rounds
         for _ in range(self.message_passing_steps):
