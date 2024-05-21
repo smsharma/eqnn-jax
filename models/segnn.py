@@ -156,7 +156,7 @@ class SEGNN(nn.Module):
     scalar_activation: str = "gelu"  # Activation function for scalars
     gate_activation: str = "sigmoid"  # Activation function for gate scalars
     task: str = "graph"  # "graph" or "node"
-    d_output: int = 1
+    n_outputs: int = 1
     output_irreps: Optional[Irreps] = None  # Output irreps for node-wise task; defaults to input irreps
     readout_agg: str = "mean"  # "sum", "mean", "max"
     mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
@@ -289,7 +289,7 @@ class SEGNN(nn.Module):
             mlp = MLP([
                 self.mlp_readout_widths[0] * agg_nodes.shape[-1]] + \
                 [w * self.d_hidden for w in self.mlp_readout_widths[1:]] + \
-                [self.d_output,]
+                [self.n_outputs,]
             )                                                                        
             out = mlp(agg_nodes)                                                             
             return out

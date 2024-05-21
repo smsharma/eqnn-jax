@@ -40,7 +40,7 @@ def get_edge_mlp_updates(
     def update_fn(
         edges: jnp.array, senders: IrrepsArray, receivers: IrrepsArray, globals: jnp.array
     ) -> jnp.array:
-        d_ij = jnp.linalg.norm(rel_distance.array, axis=-1)
+        
         m_ij = Linear(senders.irreps)(senders)
 
         # Angular
@@ -54,6 +54,7 @@ def get_edge_mlp_updates(
         m_ij = tensor_product(m_ij, a_ij)
 
         # Radial
+        d_ij = jnp.linalg.norm(rel_distance.array, axis=-1)
         R_ij = e3nn.bessel(d_ij, n_radial_basis, r_cutoff)
 
         activation_nn = getattr(nn, activation)
@@ -88,21 +89,18 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_edges: int = 20):
 
 
 class NequIP(nn.Module):
-    d_hidden: int = 64  # Hidden dimension
-    l_max_hidden: int = 2  # Maximum spherical harmonic degree for hidden features
-    l_max_attr: int = (
-        2  # Maximum spherical harmonic degree for steerable geometric features
-    )
+    d_hidden: int = 128  # Hidden dimension
+    l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
+    l_max_attr: int = 1  # Maximum spherical harmonic degree for steerable geometric features
     sphharm_norm: str = "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
     irreps_out: Optional[Irreps] = None  # Output irreps; defaults to input irreps
-    normalize_messages: bool = True  # Normalize messages by number of edges
-    num_message_passing_steps: int = 3  # Number of message passing steps
+    message_passing_steps: int = 3  # Number of message passing steps
     n_layers: int = 3  # Number of gated tensor products in each message passing step
     activation: str = "gelu"  # Activation function for MLPs
-    message_passing_agg: str = "sum"  # "sum", "mean", "max"
+    message_passing_agg: str = "mean"  # "sum", "mean", "max"
     readout_agg: str = "mean"  # "sum", "mean", "max"
-    mlp_readout_widths: List[int] = (4, 2)  # Factor of d_hidden for global readout MLPs
-    task: str = "node"  # "graph" or "node"
+    mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
+    task: str = "graph"  # "graph" or "node"
     n_outputs: int = 1  # Number of outputs for graph-level readout
     n_radial_basis: int = 4  # Number of radial basis (Bessel) functions
     r_cutoff: float = 1.0  # Cutoff radius for radial basis (Bessel) functions
@@ -111,8 +109,6 @@ class NequIP(nn.Module):
     def __call__(
         self,
         graphs: jraph.GraphsTuple,
-        node_attrs: Optional[Irreps] = None,
-        edge_attrs: Optional[Irreps] = None,
     ) -> jraph.GraphsTuple:
         aggregate_edges_for_nodes_fn = getattr(
             utils, f"segment_{self.message_passing_agg}"
@@ -138,7 +134,7 @@ class NequIP(nn.Module):
         r_ij = x_i - x_j  # Relative position vector
 
         # Message passing rounds
-        for _ in range(self.num_message_passing_steps):
+        for _ in range(self.message_passing_steps):
             update_edge_fn = get_edge_mlp_updates(
                 rel_distance=r_ij,
                 d_hidden=self.d_hidden,

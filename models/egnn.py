@@ -4,8 +4,8 @@ import flax.linen as nn
 import jax.numpy as jnp
 import jraph
 from jraph._src import utils
+import e3nn_jax as e3nn
 
-from models.utils.graph_utils import fourier_features, get_apply_pbc
 from models.mlp import MLP
 
 
@@ -14,11 +14,11 @@ def get_edge_mlp_updates(
     n_layers,
     activation,
     position_only=False,
-    use_fourier_features=False,
-    fourier_feature_kwargs={"num_encodings": 16, "include_self": True},
     tanh_out=False,
     soft_edges=False,
-    apply_pbc=None
+    apply_pbc=None,
+    n_radial_basis=32,
+    r_max=0.3,
 ) -> Callable:
     def update_fn(
         edges: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
@@ -79,18 +79,17 @@ def get_edge_mlp_updates(
         )
 
         # Relative distances, optionally with Fourier features
-        d_ij = x_i - x_j
+        EPS = 1e-7
+        r_ij = x_i - x_j + EPS
         if apply_pbc:
-            d_ij = apply_pbc(d_ij)
-        d_ij2 = jnp.sum(d_ij ** 2, axis=1, keepdims=True)
-        d_ij2 = (
-            fourier_features(d_ij2, **fourier_feature_kwargs)
-            if use_fourier_features
-            else d_ij2
-        )
+            r_ij = apply_pbc(r_ij)
+
+        d_ij = jnp.sqrt(jnp.sum(r_ij ** 2, axis=1, keepdims=False))
+        d_ij = e3nn.bessel(d_ij, n_radial_basis, r_max)
+        d_ij = d_ij.reshape(d_ij.shape[0], -1)
 
         # Get invariants
-        message_scalars = d_ij2
+        message_scalars = d_ij
 
         if concats is not None:
             message_scalars = jnp.concatenate([message_scalars, concats], axis=-1)
@@ -110,7 +109,7 @@ def get_edge_mlp_updates(
         if tanh_out:
             trans = jax.nn.tanh(trans)
 
-        x_ij_trans = d_ij * trans
+        x_ij_trans = r_ij * trans
         x_ij_trans = jnp.clip(x_ij_trans, -100.0, 100.0)  # From original code
 
         return x_ij_trans, m_ij
@@ -122,9 +121,7 @@ def get_node_mlp_updates(
     d_hidden,
     n_layers,
     activation,
-    n_edges,
     position_only=False,
-    normalize_messages=False,
     decouple_pos_vel_updates=False,
     apply_pbc=None
 ) -> Callable:
@@ -144,9 +141,6 @@ def get_node_mlp_updates(
         """
 
         sum_x_ij, m_i = receivers  # Get aggregated messages
-
-        if normalize_messages:
-            sum_x_ij = sum_x_ij / (n_edges - 1)  # C = M - 1 as in original paper
 
         if position_only:  # Positions only; no velocities
             if nodes.shape[-1] == 3:  # No scalar attributes
@@ -243,29 +237,20 @@ class EGNN(nn.Module):
 
     # Attributes for all MLPs
     message_passing_steps: int = 3
-    d_hidden: int = 64
+    d_hidden: int = 128
     n_layers: int = 3
     activation: str = "gelu"
-
-    soft_edges: bool = False  # Scale edges by a learnable function
-    use_fourier_features: bool = True
-    fourier_feature_kwargs = {"num_encodings": 16, "include_self": True}
+    soft_edges: bool = True  # Scale edges by a learnable function
     positions_only: bool = False  # (pos, vel, scalars) vs (pos, scalars)
     tanh_out: bool = False
-    normalize_messages: bool = True  # Divide sum_x_ij by (n_edges - 1)
-    decouple_pos_vel_updates: bool = (
-        False  # Use extra MLP to decouple position and velocity updates
-    )
-
+    n_radial_basis: int = 32  # Number of radial basis functions for distance
+    r_max: float = 0.3  # Maximum distance for radial basis functions
+    decouple_pos_vel_updates: bool = False  # Use extra MLP to decouple position and velocity updates
     message_passing_agg: str = "sum"  # "sum", "mean", "max"
     readout_agg: str = "mean"
-    mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
+    mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
     task: str = "graph"  # "graph" or "node"
-    readout_only_positions: bool = (
-        False  # Graph-level readout only uses positions; otherwise use all features
-    )
     n_outputs: int = 1  # Number of outputs for graph-level readout
-    d_output: int = 3
     apply_pbc: Callable = None
 
     @nn.compact
@@ -304,9 +289,7 @@ class EGNN(nn.Module):
                 self.d_hidden,
                 self.n_layers,
                 activation,
-                n_edges=processed_graphs.n_edge,
                 position_only=self.positions_only,
-                normalize_messages=self.normalize_messages,
                 decouple_pos_vel_updates=self.decouple_pos_vel_updates,
                 apply_pbc=self.apply_pbc
             )
@@ -315,11 +298,11 @@ class EGNN(nn.Module):
                 self.n_layers,
                 activation,
                 position_only=self.positions_only,
-                use_fourier_features=self.use_fourier_features,
-                fourier_feature_kwargs=self.fourier_feature_kwargs,
                 tanh_out=self.tanh_out,
                 soft_edges=self.soft_edges,
-                apply_pbc=self.apply_pbc
+                apply_pbc=self.apply_pbc,
+                n_radial_basis=self.n_radial_basis,
+                r_max=self.r_max
             )
 
             # Instantiate graph network and apply EGCL
@@ -342,10 +325,7 @@ class EGNN(nn.Module):
                 )
 
             readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
-            if self.readout_only_positions:
-                agg_nodes = readout_agg_fn(processed_graphs.nodes[:, :3], axis=0)
-            else:
-                agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
+            agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
                 
             if processed_graphs.globals is not None:
                 agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
