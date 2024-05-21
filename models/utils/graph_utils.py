@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as np
 import jraph
+from jraph._src.utils import segment_mean
 
 import e3nn_jax as e3nn
 
@@ -19,7 +20,7 @@ def get_apply_pbc(std: np.array=None, cell: np.array = np.array(
 ):
     if std is not None:
         cell = cell / std[:3]
-        cell -= 0.5 / std[:3]
+        # cell -= 0.5 / std[:3]
 
     def apply_pbc(
         dr: np.array,
@@ -228,6 +229,25 @@ def compute_distances(
         dr = apply_pbc(dr)
     return np.sqrt(np.sum(dr**2, axis=-1))
 
+def get_invariant_edges(pos, sources, targets, distances):
+    def compute_average_distances(distances_batch, targets_batch):
+        avg_distances_flat = segment_mean(distances_batch, targets_batch, num_segments=pos.shape[1])
+        return avg_distances_flat
+    avg_distances = jax.vmap(compute_average_distances)(distances, targets)
+    distances_norm = np.linalg.norm(distances, axis=-1, keepdims=True)
+    avg_distances_norm = np.linalg.norm(avg_distances, axis=-1, keepdims=True)
+    normalized_distances = distances / distances_norm
+    normalized_avg_distances = avg_distances / avg_distances_norm
+    r_i = pos[np.arange(len(pos))[:, None], sources]  
+    r_i /= np.linalg.norm(r_i, axis=-1, keepdims=True)
+    # Compute dot product for alpha
+    alpha = np.einsum('ijk,ijk->ij', normalized_distances, 
+                       normalized_avg_distances[np.arange(normalized_distances.shape[0])[:, None], sources])
+    beta = np.einsum('ijk,ijk->ij', r_i, 
+                       normalized_avg_distances[np.arange(normalized_distances.shape[0])[:, None], sources])
+    return np.concatenate(
+        [distances_norm, alpha[..., None], beta[...,None]], axis=-1
+    )
 
 def build_graph(
     node_feats,
@@ -235,10 +255,14 @@ def build_graph(
     k,
     use_edges=True,
     apply_pbc: Optional[Callable] = None,
-    n_radial_basis=4,
-    sigma_num=16,
-    radius=None
+    n_radial_basis=0,
+    r_max=1.,
+    radius=None,
+    use_3d_distances=False,
+    use_invariant_edges=False,
 ):
+    if use_invariant_edges and n_radial_basis > 0:
+        raise ValueError("Cannot use both invariant edges and radial basis functions!")
     n_batch = len(node_feats)
     n_nodes = node_feats.shape[1]
     n_node = np.array([[n_nodes]] * n_batch)
@@ -264,22 +288,31 @@ def build_graph(
         n_edge = np.array(n_batch * [[k]])
     
     if use_edges:
-        edges = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
+        if use_3d_distances:
+            edges = distances
+        elif use_invariant_edges:
+            batch_indices = np.arange(len(node_feats)).reshape(-1, 1)
+            edges = get_invariant_edges(
+                pos = node_feats[...,:3],
+                sources = sources,
+                targets= targets,
+                distances=distances,
+            )
+        else:
+            edges = np.sqrt(np.sum(distances ** 2, axis=-1, keepdims=True))
 
         if n_radial_basis > 0:
-            edges = e3nn.bessel(edges, n_radial_basis)
+            edges = e3nn.bessel(edges, n=n_radial_basis, x_max=r_max)
             edges = np.squeeze(edges)
-            # min_sigma = np.min(edges)
-            # max_sigma = np.mean(edges)
-            # sigma_vals = np.linspace(min_sigma, max_sigma, num=sigma_num)
-            # edges = [np.exp(-(edges**2) / (2 * sigma**2)) for sigma in sigma_vals]
-            # edges = np.concatenate(edges, axis=-1)
+
+        # Concat last 2 dims if use_3d_distances
+        if use_3d_distances:
+            edges = edges.reshape(edges.shape[0], edges.shape[1], -1)
 
         if radius is not None:
             edges = np.concatenate(edges, axis=0)
     else:
         edges = None
-
 
     return jraph.GraphsTuple(
         n_node=n_node,
@@ -330,6 +363,50 @@ def rotate_representation(data, angle_deg, axis, positions_only=False):
         positions, scalars = data[:, :3], data[:, 3:]
         rotated_positions = np.matmul(rot_mat, positions.T).T
         return np.concatenate([rotated_positions, scalars], axis=1)
+
+
+def random_symmetry_matrix(key):
+    # 8 possible sign combinations for reflections
+    signs = np.array(
+        [
+            [-1, -1, -1],
+            [-1, -1, 1],
+            [-1, 1, -1],
+            [-1, 1, 1],
+            [1, -1, -1],
+            [1, -1, 1],
+            [1, 1, -1],
+            [1, 1, 1],
+        ]
+    )
+
+    # 6 permutations for axis swapping
+    perms = np.array([[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]])
+
+    # Randomly select one sign combination and one permutation
+    sign = signs[jax.random.randint(key, (), 0, 8)]
+    perm = perms[jax.random.randint(key, (), 0, 6)]
+
+    # Combine them to form the random symmetry matrix
+    matrix = np.eye(3)[perm] * sign
+    return matrix
+
+
+def augment_with_axis_permutations(
+    x,
+    rng,
+    pos_dim=3,
+):
+    rng, _ = jax.random.split(rng)
+    # Rotations and reflections that respect boundary conditions
+    matrix = random_symmetry_matrix(rng)
+    x = x.at[..., :pos_dim].set(np.dot(x[..., :pos_dim], matrix.T))
+    if x.shape[-1] > pos_dim:
+        # Rotate velocities too
+        x = x.at[..., pos_dim : pos_dim + 3].set(
+            np.dot(x[..., pos_dim : pos_dim + 3], matrix.T)
+        )
+    return x
 
 
 def fourier_features(x, num_encodings=8, include_self=True):

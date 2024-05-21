@@ -293,7 +293,7 @@ def test_equivariant_segnn(node_features):
     )
     model = GraphWrapper(
         SEGNN(
-            num_message_passing_steps=2,
+            message_passing_steps=2,
             d_hidden=32,
             task="node",
             intermediate_hidden_irreps=True,
@@ -319,7 +319,7 @@ def test_invariant_segnn(node_features):
     )
     model = GraphWrapper(
         SEGNN(
-            num_message_passing_steps=3,
+            message_passing_steps=3,
             d_hidden=32,
             task="graph",
             intermediate_hidden_irreps=True,
@@ -345,7 +345,7 @@ def test_equivariant_nequip(node_features):
     )
     model = GraphWrapper(
         NequIP(
-            num_message_passing_steps=2,
+            message_passing_steps=2,
             d_hidden=32,
             n_layers=3,
             task="node",
@@ -372,7 +372,7 @@ def test_invariant_nequip(node_features):
     )
     model = GraphWrapper(
         NequIP(
-            num_message_passing_steps=2,
+            message_passing_steps=2,
             d_hidden=32,
             n_layers=3,
             task="graph",

@@ -20,27 +20,25 @@ def get_node_mlp_updates(d_hidden, n_layers, activation):
 
     def update_fn(
         nodes: jnp.ndarray,
-        sent_attributes: jnp.ndarray,
-        received_attributes: jnp.ndarray,
+        senders: jnp.ndarray,
+        receivers: jnp.ndarray,
         globals: jnp.ndarray,
     ) -> jnp.ndarray:
         """update node features
 
         Args:
             nodes (jnp.ndarray): node features
-            sent_attributes (jnp.ndarray): attributes sent to neighbors
+            senders (jnp.ndarray): attributes sent to neighbors
             received_attributes (jnp.ndarray): attributes received from neighbors
             globals (jnp.ndarray): global features
 
         Returns:
             jnp.ndarray: updated node features
         """
-
-        if received_attributes is not None:
-            inputs = jnp.concatenate([nodes, received_attributes], axis=1)
-        else:  # If lone node
-            inputs = jnp.concatenate([nodes], axis=1)
-        return MLP([d_hidden] * n_layers, activation=activation)(inputs)
+        m_i = nodes
+        if receivers is not None:
+            m_i = jnp.concatenate([m_i, receivers], axis=-1)
+        return MLP([d_hidden] * n_layers, activation=activation)(m_i)
 
     return update_fn
 
@@ -76,39 +74,29 @@ def get_edge_mlp_updates(d_hidden, n_layers, activation) -> Callable:
 
         # If there are no edges in the initial layer
         if edges is not None:
-            inputs = jnp.concatenate([edges, senders, receivers], axis=1)
+            m_ij = jnp.concatenate([edges, senders, receivers], axis=-1)
         else:
-            inputs = jnp.concatenate([senders, receivers], axis=1)
-        return MLP([d_hidden] * n_layers, activation=activation)(inputs)
+            m_ij = jnp.concatenate([senders, receivers], axis=-1)
+        return MLP([d_hidden] * n_layers, activation=activation)(m_ij)
 
     return update_fn
-
-
-class Identity(nn.Module):
-    """Identity module"""
-    @nn.compact
-    def __call__(self, x):
-        return x
 
 
 class GNN(nn.Module):
     """Standard Graph Neural Network"""
 
-    # Attributes for all MLPs
-    message_passing_steps: int = 3
     d_hidden: int = 64
-    d_output: Optional[int] = None
     n_layers: int = 3
-    activation: str = "gelu"
+    message_passing_steps: int = 3
     message_passing_agg: str = "sum"  # "sum", "mean", "max"
-    readout_agg: str = "mean"
-    mlp_readout_widths: List[int] = (8, 2)  # Factor of d_hidden for global readout MLPs
-    task: str = "graph"  # "graph" or "node"
-    readout_only_positions: bool = False  # Graph-level readout only uses positions
-    n_outputs: int = 1  # Number of outputs for graph-level readout
+    activation: str = "gelu"
     norm: str = "layer"
-
-    # normalize edge aggregation
+    task: str = "graph"  # "graph" or "node"
+    n_outputs: int = 1  # Number of outputs for graph-level readout
+    readout_agg: str = "mean"
+    mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
+    position_features: bool = True  # Use absolute positions as node features
+    residual: bool = False  # Residual connections
 
     @nn.compact
     def __call__(self, graphs: jraph.GraphsTuple) -> jraph.GraphsTuple:
@@ -120,7 +108,6 @@ class GNN(nn.Module):
         Returns:
             jraph.GraphsTuple: Updated graph
         """
-        processed_graphs = graphs
 
         activation = getattr(nn, self.activation)
 
@@ -132,14 +119,25 @@ class GNN(nn.Module):
         aggregate_edges_for_nodes_fn = getattr(
             utils, f"segment_{self.message_passing_agg}"
         )
+        if not self.position_features:
+            graphs = graphs._replace(
+                    nodes=graphs.nodes[..., 3:],
+                    )
+            
+        # Project node features into d_hidden, if not just using positions
+        if self.position_features:
+            graphs = graphs._replace(
+                nodes=nn.Dense(self.d_hidden)(graphs.nodes)
+            )
 
         # Apply message-passing rounds
         for _ in range(self.message_passing_steps):
             # Node and edge update functions
-            update_node_fn = get_node_mlp_updates(
+
+            update_edge_fn = get_edge_mlp_updates(
                 self.d_hidden, self.n_layers, activation
             )
-            update_edge_fn = get_edge_mlp_updates(
+            update_node_fn = get_node_mlp_updates(
                 self.d_hidden, self.n_layers, activation
             )
 
@@ -149,47 +147,50 @@ class GNN(nn.Module):
                 update_edge_fn=update_edge_fn,
                 aggregate_edges_for_nodes_fn=aggregate_edges_for_nodes_fn
             )
+            processed_graphs = graph_net(graphs)
 
-            processed_graphs = graph_net(processed_graphs)
+            # Skip connection
+            if self.residual:
+                graphs = processed_graphs._replace(
+                    nodes=processed_graphs.nodes + graphs.nodes
+                )
+            else:
+                graphs = processed_graphs
 
             # Optional normalization
-            if self.norm == "layer":
-                norm = nn.LayerNorm()
-            else:
-                norm = Identity()  # No normalization
-            processed_graphs = processed_graphs._replace(
-                nodes=norm(processed_graphs.nodes), edges=norm(processed_graphs.edges)
-            )
-        # node_reps = processed_graphs
+            norm = nn.LayerNorm() if self.norm == "layer" else lambda x: x
 
-        if self.readout_agg not in ["sum", "mean", "max"]:
+            graphs = graphs._replace(
+                nodes=norm(graphs.nodes), edges=norm(graphs.edges)
+            )
+
+        if self.readout_agg not in ["sum", "mean", "max", "attn"]:
             raise ValueError(
-                f"Invalid global aggregation function {self.message_passing_agg}"
+                f"Invalid global aggregation function {self.readout_agg}"
             )
-
-        readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
 
         if self.task == "node":
             if self.d_output is not None:
                 nodes = MLP(
-                    [self.d_hidden] * (self.n_layers - 1) + [self.d_output],
+                    [self.d_hidden] * (self.n_layers - 1) + [self.n_outputs],
                     activation=activation,
-                )(processed_graphs.nodes)
-                processed_graphs = processed_graphs._replace(
+                )(graphs.nodes)
+                graphs = graphs._replace(
                     nodes=nodes,
                 )
-            return processed_graphs
+            return graphs
 
-        elif self.task == "graph":
-            # Aggregate residual node features; only use positions, optionally
-            if self.readout_only_positions:
-                agg_nodes = readout_agg_fn(processed_graphs.nodes[:, :3], axis=0)
+        elif self.task == "graph":  # Aggregate residual node features
+            
+            if self.readout_agg == "attn":
+                q_agg = self.param("q_qgg", nn.initializers.xavier_uniform(), (1, graphs.nodes.shape[-1]))
+                agg_nodes = nn.MultiHeadDotProductAttention(num_heads=2,)(q_agg, graphs.nodes,)[0, :]
             else:
-                agg_nodes = readout_agg_fn(processed_graphs.nodes, axis=0)
+                readout_agg_fn = getattr(jnp, f"{self.readout_agg}")
+                agg_nodes = readout_agg_fn(graphs.nodes, axis=0)
 
-                
-            if processed_graphs.globals is not None:
-                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
+            if graphs.globals is not None:
+                agg_nodes = jnp.concatenate([agg_nodes, graphs.globals]) # Use tpcf
                 
                 norm = nn.LayerNorm()
                 agg_nodes = norm(agg_nodes)
