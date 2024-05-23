@@ -170,7 +170,7 @@ class GNN(nn.Module):
             )
 
         if self.task == "node":
-            if self.d_output is not None:
+            if self.n_outputs is not None:
                 nodes = MLP(
                     [self.d_hidden] * (self.n_layers - 1) + [self.n_outputs],
                     activation=activation,
