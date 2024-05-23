@@ -201,12 +201,10 @@ class SEGNN(nn.Module):
         st_graphs: SteerableGraphsTuple,
     ) -> jraph.GraphsTuple:
         
-        print('lmax hidden = ', self.l_max_hidden)
         if self.hidden_irreps is None:
             hidden_irreps = balanced_irreps(lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True)  # For hidden features
         else:
             hidden_irreps = self.hidden_irreps
-        print('hidden irreps = ', hidden_irreps)
 
         irreps_in = st_graphs.nodes.irreps  # Input irreps
         output_irreps = self.output_irreps if self.output_irreps is not None else irreps_in  # Output irreps desired, if different from input irreps
