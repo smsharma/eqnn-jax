@@ -35,8 +35,7 @@ def get_edge_mlp_updates(
     r_cutoff: float = 1.0,
     activation: str = "gelu",
 ):
-    # irreps_out = irreps_out.regroup()
-
+    
     def update_fn(
         edges: jnp.array, senders: IrrepsArray, receivers: IrrepsArray, globals: jnp.array
     ) -> jnp.array:
@@ -90,20 +89,19 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_edges: int = 20):
 
 class NequIP(nn.Module):
     d_hidden: int = 128  # Hidden dimension
-    l_max_hidden: int = 1  # Maximum spherical harmonic degree for hidden features
-    l_max_attr: int = 1  # Maximum spherical harmonic degree for steerable geometric features
-    sphharm_norm: str = "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
-    irreps_out: Optional[Irreps] = None  # Output irreps; defaults to input irreps
-    message_passing_steps: int = 3  # Number of message passing steps
     n_layers: int = 3  # Number of gated tensor products in each message passing step
-    activation: str = "gelu"  # Activation function for MLPs
+    message_passing_steps: int = 3  # Number of message passing steps
     message_passing_agg: str = "mean"  # "sum", "mean", "max"
-    readout_agg: str = "mean"  # "sum", "mean", "max"
-    mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
+    activation: str = "gelu"  # Activation function for MLPs
     task: str = "graph"  # "graph" or "node"
     n_outputs: int = 1  # Number of outputs for graph-level readout
+    readout_agg: str = "mean"  # "sum", "mean", "max"
+    mlp_readout_widths: List[int] = (4, 2, 2)  # Factor of d_hidden for global readout MLPs
     n_radial_basis: int = 4  # Number of radial basis (Bessel) functions
     r_cutoff: float = 1.0  # Cutoff radius for radial basis (Bessel) functions
+    l_max: int = 1  # Maximum spherical harmonic degree for steerable geometric features and hidden features
+    sphharm_norm: str = "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
+    irreps_out: Optional[Irreps] = None  # Output irreps; defaults to input irreps
 
     @nn.compact
     def __call__(
@@ -115,22 +113,17 @@ class NequIP(nn.Module):
         )
 
         # Compute irreps
-        irreps_attr = Irreps.spherical_harmonics(
-            self.l_max_attr
-        )  # Steerable geometric features
-        irreps_hidden = balanced_irreps(
-            lmax=self.l_max_hidden, feature_size=self.d_hidden, use_sh=True
-        )  # Hidden features # NOT USED
+        irreps_attr = Irreps.spherical_harmonics(self.l_max)  # Steerable geometric features
+        irreps_hidden = balanced_irreps(lmax=self.l_max, feature_size=self.d_hidden, use_sh=True)  # Hidden features # NOT USED
         irreps_in = graphs.nodes.irreps  # Input irreps
-        irreps_out = (
-            self.irreps_out if self.irreps_out is not None else irreps_in
-        )  # Output irreps, if different from input irreps
+        irreps_out = (self.irreps_out if self.irreps_out is not None else irreps_in)  # Output irreps, if different from input irreps
 
         # Distance vector; distance embedding is always used as edge attribute
         x_i, x_j = (
             graphs.nodes.slice_by_mul[:1][graphs.senders],
             graphs.nodes.slice_by_mul[:1][graphs.receivers],
         )  # Get position coordinates
+
         r_ij = x_i - x_j  # Relative position vector
 
         # Message passing rounds
@@ -198,7 +191,7 @@ class NequIP(nn.Module):
             )
 
             if processed_graphs.globals is not None:
-                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) #use tpcf
+                agg_nodes = jnp.concatenate([agg_nodes, processed_graphs.globals]) # Use tpcf
                 
                 norm = nn.LayerNorm()
                 agg_nodes = norm(agg_nodes)
