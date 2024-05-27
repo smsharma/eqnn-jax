@@ -96,7 +96,7 @@ def process_data_to_tfrecords(params_df, data_dir, tfrecords_path, num_tfrecords
     files_per_tfrecord = int(np.ceil(num_files / (num_tfrecords + num_tfrecords_val + num_tfrecords_test)))
     print(f'{files_per_tfrecord} files per tfrecord')
 
-    for i in range(num_tfrecords):
+    for i in range(45,num_tfrecords):
         tfrecord_file = os.path.join(tfrecords_path, f'halos_train_{i + 1}.tfrecord')
         indices = range(i * files_per_tfrecord, min((i + 1) * files_per_tfrecord, num_files))
         write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos)
