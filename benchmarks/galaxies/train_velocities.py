@@ -463,9 +463,10 @@ if __name__ == "__main__":
         @nn.compact
         def __call__(self, x):
             if x.nodes.shape[-1] == 3:
-                ones = jnp.ones(x.nodes[..., :].shape[:2] + (1,))
-                nodes = jnp.concatenate([x.nodes[..., :], ones], axis=-1)
-                nodes = e3nn.IrrepsArray("1o + 1x0e", nodes)
+                #ones = jnp.ones(x.nodes[..., :].shape[:2] + (1,))
+                #nodes = jnp.concatenate([x.nodes[..., :], ones], axis=-1)
+                #nodes = e3nn.IrrepsArray("1o + 1x0e", nodes)
+                nodes = e3nn.IrrepsArray("1o", x.nodes)
             else:
                 nodes = e3nn.IrrepsArray("1o + 1o", x.nodes[..., :])
             graph = jraph.GraphsTuple(
