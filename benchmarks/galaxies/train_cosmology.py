@@ -3,7 +3,11 @@ from flax.training.train_state import TrainState
 from functools import partial
 import flax.linen as nn
 from flax.training.early_stopping import EarlyStopping
+from flax.training import checkpoints
 import optax
+
+import jax
+from jax.experimental.sparse import BCOO
 
 from tqdm import trange, tqdm
 from time import sleep
@@ -16,10 +20,9 @@ from pathlib import Path
 import jax.numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import jax
-import jraph
-from jax.experimental.sparse import BCOO
+import pickle
 
+import jraph
 import e3nn_jax as e3nn
 
 import sys
@@ -34,12 +37,13 @@ from models.gnn import GNN
 from models.egnn import EGNN
 # from models.equivariant_transformer import EquivariantTransformer
 from models.segnn import SEGNN
+from models.nequip import NequIP
 from models.diffpool import DiffPool
 
-from benchmarks.galaxies.dataset_large import get_halo_dataset
+from benchmarks.galaxies.dataset_large import get_halo_dataset, generate_tpcfs
 
 MLP_PARAMS = {
-    "feature_sizes": [128, 128, 128, 1],
+    "feature_sizes": [1028, 1028, 1028, 2],
 }
 
 GNN_PARAMS = {
@@ -54,23 +58,23 @@ GNN_PARAMS = {
     "readout_agg": "mean",
     "mlp_readout_widths": (4, 2, 2),
     "position_features": True,
-    "residual": False,
+    "residual": True,
 }
 
 EGNN_PARAMS = {
-    "message_passing_steps": 2,
-    "d_hidden": 64,
+    "message_passing_steps": 3,
+    "d_hidden": 128,
     "n_layers": 3,
     "activation": "gelu",
     "soft_edges": True,
     "positions_only": True,
     "tanh_out": False,
-    "n_radial_basis": 32,
-    "r_max": 0.3,
+    "n_radial_basis": 64,
+    "r_max": 0.6,
     "decouple_pos_vel_updates": True,
     "message_passing_agg": "mean",
     "readout_agg": "mean",
-    "mlp_readout_widths": [8, 2, 2],
+    "mlp_readout_widths": [4, 2, 2],
     "task": "graph",
     "n_outputs": 2,
 }
@@ -111,23 +115,23 @@ SEGNN_PARAMS = {
     "mlp_readout_widths": (4, 2, 2),
     "l_max_hidden": 1,
     "hidden_irreps": None,
-    "residual": False,
+    "residual": True,
 }
 
 NEQUIP_PARAMS = {
-    "d_hidden": 64,
-    "l_max_hidden":2,
-    "l_max_attr":2,
-    "sphharm_norm": 'norm',
-    "num_message_passing_steps": 3,
-    "n_layers": 3,
-    "task": "graph",
+    "d_hidden": 128,
+    "l_max":1,
+    "sphharm_norm": 'integral',
     "irreps_out": e3nn.Irreps("1x0e"),
-    "normalize_messages": True,
+    "message_passing_steps": 3,
+    "n_layers": 3,
     "message_passing_agg": "mean",
     "readout_agg": "mean",
-    "mlp_readout_widths": [8, 2, 2],
-    "n_radial_basis": 8
+    "mlp_readout_widths": [4, 2, 2],
+    "task": "graph",
+    "n_outputs": 2,
+    "n_radial_basis": 64,
+    "r_cutoff": 0.6,
 }
 
 class GraphWrapper(nn.Module):
@@ -180,18 +184,17 @@ class GraphWrapper(nn.Module):
                 globals=x.globals,
                 edges=None,
                 lmax_attributes=self.param_dict['l_max_hidden'],
-                apply_pbc=apply_pbc,
-                n_radial_basis=n_radial_basis,
-                r_max=r_max,
+                apply_pbc=self.apply_pbc,
+                n_radial_basis=self.n_radial_basis,
+                r_max=self.r_max,
             )
             
             return jax.vmap(SEGNN(**self.param_dict))(st_graph)
 
         elif self.model_name == "NequIP":
             if x.nodes.shape[-1] == 3:
-                # nodes = e3nn.IrrepsArray("1o", x.nodes[..., :])
-                ones = np.ones(x.nodes[..., :].shape[:2] + (4,))
-                nodes = np.concatenate([x.nodes[..., :], ones], axis=-1)
+                ones = np.ones(x.nodes[..., :].shape[:2] + (1,))
+                nodes = np.concatenate([x.nodes[..., :], x.nodes[..., :], ones], axis=-1)
                 nodes = e3nn.IrrepsArray("1o + 1o + 1x0e", nodes)
             else:
                 nodes = e3nn.IrrepsArray("1o + 1o + 1x0e", x.nodes[..., :])
@@ -204,14 +207,15 @@ class GraphWrapper(nn.Module):
                 nodes=nodes, 
                 senders=x.senders,
                 receivers=x.receivers)
-
+            
             return jax.vmap(NequIP(**self.param_dict))(graph)
         else:
             raise ValueError("Please specify a valid model name.")
 
 
 def loss_mse(pred_batch, cosmo_batch):
-    return np.mean((pred_batch - cosmo_batch) ** 2)
+    # return np.mean((pred_batch - cosmo_batch) ** 2)
+    return np.mean((pred_batch - cosmo_batch) ** 2, axis=0)
 
 
 @partial(
@@ -220,6 +224,7 @@ def loss_mse(pred_batch, cosmo_batch):
     static_broadcasted_argnums=(4,5,6,7)
 )
 def train_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis, r_max, use_3d_distances):
+    
     halo_graph = build_graph(
         halo_batch, 
         tpcfs_batch, 
@@ -233,20 +238,21 @@ def train_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basi
 
     def loss_fn(params):
         outputs = state.apply_fn(params, halo_graph)
-        # outputs, assignments = state.apply_fn(params, halo_graph)
         if len(outputs.shape) > 2:
             outputs = np.squeeze(outputs, axis=-1)
         loss = loss_mse(outputs, y_batch)
-        return loss
+        return loss.mean()
 
-    print(type(state))
     # Get loss, grads, and update state
-    loss, grads = jax.value_and_grad(loss_fn)(state.params)
+    avg_loss, grads = jax.value_and_grad(loss_fn)(state.params)
     grads = jax.lax.pmean(grads, "batch")
     new_state = state.apply_gradients(grads=grads)
-    metrics = {"loss": jax.lax.pmean(loss, "batch")}
 
-    # outputs, assignments = state.apply_fn(state.params, halo_graph, return_assignments=True)
+    outputs = state.apply_fn(state.params, halo_graph)
+    if len(outputs.shape) > 2:
+            outputs = np.squeeze(outputs, axis=-1)
+    individual_losses = jax.lax.stop_gradient(loss_mse(outputs, y_batch))
+    metrics = {"loss": jax.lax.pmean(individual_losses, "batch")}
 
     return new_state, metrics
 
@@ -268,15 +274,12 @@ def eval_step(state, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis
         use_3d_distances=use_3d_distances
     )
 
-    print(type(state))
     outputs = state.apply_fn(state.params, halo_graph)
-
-    # outputs, assignments = state.apply_fn(state.params, halo_graph)
     if len(outputs.shape) > 2:
         outputs = np.squeeze(outputs, axis=-1)
-    loss = jax.lax.stop_gradient(loss_mse(outputs, y_batch))
+    individual_losses = jax.lax.stop_gradient(loss_mse(outputs, y_batch))
 
-    return outputs, {"loss": jax.lax.pmean(loss, "batch")} #, assignments
+    return outputs, {"loss": jax.lax.pmean(individual_losses, "batch")} 
 
 
 def split_batches(num_local_devices, halo_batch, y_batch, tpcfs_batch):
@@ -300,26 +303,27 @@ def split_batches(num_local_devices, halo_batch, y_batch, tpcfs_batch):
 def run_expt(
     model_name,
     feats,
-    target,
     param_dict,
     data_dir,
-    use_pbc=True,
+    target = ["Omega_m", "sigma_8"],
+    use_pbcs=True,
+    boxsize=1000.,
     use_edges=True,
     n_radial_basis=64,
     r_max=0.6,
     use_3d_distances=False,
     use_tpcf="none",
-    radius=None,
     n_steps=1000,
-    n_batch=32,
-    n_train=200, #31550
-    n_val=None, #631
-    n_test=None, #587
-    learning_rate=5e-5,
+    batch_size=32,
+    n_train=960, 
+    n_val=512, 
+    n_test=512, 
+    learning_rate=3e-4,
     weight_decay=1e-5,
-    eval_every=200,
+    eval_every=500,
     get_node_reps=False,
     plotting=True,
+    save_model=True
 ):
     num_local_devices = jax.local_device_count()
     
@@ -327,9 +331,7 @@ def run_expt(
     experiments_base_dir = Path(__file__).parent / "experiments/"
     d_hidden = param_dict["d_hidden"]
     experiment_id = (
-        f"{model_name}_{feats}_{n_batch}b_{n_steps}s_{d_hidden}d_{K}k_{n_radial_basis}rbf"
-        + "tpcf-" + use_tpcf
-        + f"_{radius}r"
+        f"{model_name}_N={n_train}_tpcf=" + use_tpcf
     )
 
     current_experiment_dir = experiments_base_dir / experiment_id
@@ -343,9 +345,7 @@ def run_expt(
     else:
         raise NotImplementedError
 
-    target = ['Omega_m', 'sigma_8']
-        
-    train_dataset, n_train, mean, std, _, _ = get_halo_dataset(batch_size=n_batch,  # Batch size
+    train_dataset, n_train, _, std, _, _ = get_halo_dataset(batch_size=batch_size,  # Batch size
                                                                 num_samples=n_train,  # If not None, will only take a subset of the dataset
                                                                 split='train',  # 'train', 'val', 'test'
                                                                 standardize=True,  # If True, will standardize the features
@@ -354,50 +354,48 @@ def run_expt(
                                                                 features=features,  # Features to include
                                                                 params=target,  # Parameters to include
                                                             )
-    mean, std = mean.numpy(), std.numpy()
-    norm_dict = {'mean': mean, 'std': std}
+    std = std.numpy()
     train_iter = iter(train_dataset)
-    halo_train, y_train = next(train_iter)
+    halo_train, y_train, tpcfs_train = next(train_iter)
+    halo_train, y_train, tpcfs_train = halo_train.numpy(), y_train.numpy(), tpcfs_train.numpy()
 
-    val_dataset, n_val = get_halo_dataset(batch_size=n_batch,  
+    val_dataset, n_val = get_halo_dataset(batch_size=batch_size,  
                                            num_samples=n_val, 
                                            split='val',
                                            standardize=True, 
                                            return_mean_std=False,  
                                            seed=42,
                                            features=features, 
-                                           params=target,
+                                           params=target
                                         )
-    val_iter = iter(val_dataset)
-    halo_val, y_val = next(val_iter)
 
-
-    test_dataset, n_test = get_halo_dataset(batch_size=n_batch,  
+    test_dataset, n_test = get_halo_dataset(batch_size=batch_size,  
                                            num_samples=n_test, 
                                            split='test',
                                            standardize=True, 
                                            return_mean_std=False,  
                                            seed=42,
                                            features=features, 
-                                           params=target,
+                                           params=target
                                         )
-    test_iter = iter(test_dataset)
-    halo_test, y_test = next(test_iter)
 
-    # Convert to numpy arrays
-    halo_train, y_train = halo_train.numpy(), y_train.numpy()
-    halo_val, y_val = halo_val.numpy(), y_val.numpy()
-    halo_test, y_test = halo_test.numpy(), y_test.numpy()
+    print('Train-Val-Test split:', n_train, n_val, n_test)
 
-    print(n_train, n_val, n_test)
-    
-    tpcfs_train = None
-    tpcfs_val = None
-    tpcfs_test = None
-    init_tpcfs = None
-    # TO DO: implement tpcfs
-    
-    apply_pbc = get_apply_pbc(std=std) if use_pbc else None
+    if use_tpcf == "small":
+        tpcf_idx = list(range(8))
+    elif use_tpcf == "large":
+        tpcf_idx = list(range(15, 24))
+    else:
+        tpcf_idx = list(range(24))
+
+    tpcfs_train = tpcfs_train[:, tpcf_idx]
+    if use_tpcf == 'none':
+        init_tpcfs = None
+    else:
+        init_tpcfs = tpcfs_train[:2]
+
+    apply_pbc = get_apply_pbc(std=std / boxsize) if use_pbcs else None
+
     if model_name in ['EGNN', 'PointNet']:
         param_dict['apply_pbc'] = apply_pbc
 
@@ -415,97 +413,107 @@ def run_expt(
     if get_node_reps:
         param_dict["get_node_reps"] = True
 
-    model = GraphWrapper(model_name, param_dict, apply_pbc)
+    model = GraphWrapper(model_name, param_dict, apply_pbc, n_radial_basis, r_max)
     key = jax.random.PRNGKey(0)
     out, params = model.init_with_output(key, graph)
-
+    
+    print(f"Number of parameters: {sum([p.size for p in jax.tree_leaves(params)])}")    
     
     # Define train state and replicate across devices
     replicate = flax.jax_utils.replicate
     unreplicate = flax.jax_utils.unreplicate
 
-    lr = optax.cosine_decay_schedule(3e-4, 2000)
+    lr = optax.cosine_decay_schedule(learning_rate, 2000)
     tx = optax.adamw(learning_rate=lr, weight_decay=weight_decay)
     state = TrainState.create(apply_fn=model.apply, params=params, tx=tx)
     pstate = replicate(state)
-    early_stop = EarlyStopping(min_delta=1e-4, patience=10)
+    # early_stop = EarlyStopping(min_delta=1e-4, patience=10)
     
-    # Run training loop
     print('Training...')
     losses = []
     val_losses = []
     best_val = 1e10
+    best_vals = None
+    best_state = None
     test_loss_ckp = 1e10
     with trange(n_steps, ncols=120) as steps:
+        train_iter = iter(train_dataset)
         for step in steps:
             # Training
-            train_iter = iter(train_dataset)
-            running_train_loss = 0.0
-            for _ in range(n_train // n_batch):
-                halo_batch, y_batch = next(train_iter)
-                halo_batch, y_batch = halo_batch.numpy(), y_batch.numpy()
+            halo_batch, y_batch, tpcfs_batch = next(train_iter)
+            halo_batch, y_batch, tpcfs_batch = halo_batch.numpy(), y_batch.numpy(), tpcfs_batch.numpy()
+            if use_tpcf != 'none':
+                tpcfs_batch = tpcfs_batch[:, tpcf_idx]
+            else:
                 tpcfs_batch = None
             
-                # Split batches across devices
-                halo_batch, y_batch, tpcfs_batch = split_batches(
-                    num_local_devices, halo_batch, y_batch, tpcfs_batch
-                )
-                pstate, metrics = train_step(
-                    pstate, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis, r_max, use_3d_distances
-                )
-                train_loss = unreplicate(metrics["loss"])
-                running_train_loss += train_loss
-            avg_train_loss = running_train_loss/(n_train // n_batch)
+            halo_batch, y_batch, tpcfs_batch = split_batches(
+                num_local_devices, halo_batch, y_batch, tpcfs_batch
+            )
+            pstate, metrics = train_step(
+                pstate, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis, r_max, use_3d_distances
+            )
+            train_loss = unreplicate(metrics["loss"])
 
-            # Validation
-            print('Validation')
-            val_iter = iter(val_dataset)
-            running_val_loss = 0.0
-            for _ in range(n_val // n_batch):
-                halo_batch, y_batch = next(val_iter)
-                halo_batch, y_batch = halo_batch.numpy(), y_batch.numpy()
-                tpcfs_batch = None
-            
-                halo_batch, y_batch, tpcfs_batch = split_batches(
-                    num_local_devices, halo_batch, y_batch, tpcfs_batch
-                )
-                outputs, metrics = eval_step(
-                    pstate, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis, r_max, use_3d_distances
-                )
-                val_loss = unreplicate(metrics["loss"])
-                running_val_loss += val_loss
-            avg_val_loss = running_val_loss/(n_val // n_batch)
+            if step % eval_every == 0:
+                # Validation
+                val_iter = iter(val_dataset)
+                running_val_loss = np.zeros((1,2))
+                count = 0
+                for halo_val_batch, y_val_batch, tpcfs_val_batch in val_iter:
+                    halo_val_batch, y_val_batch, tpcfs_val_batch = halo_val_batch.numpy(), y_val_batch.numpy(), tpcfs_val_batch.numpy()
+                    if use_tpcf != 'none':
+                        tpcfs_val_batch = tpcfs_val_batch[:, tpcf_idx]
+                    else:
+                        tpcfs_val_batch = None
 
-            if avg_val_loss < best_val:
-                best_val = avg_val_loss
-                tag = " (best)"
-
-                test_iter = iter(test_dataset)
-                running_test_loss = 0.0
-                for _ in range(n_test // n_batch):
-                    halo_batch, y_batch = next(test_iter)
-                    halo_batch, y_batch = halo_batch.numpy(), y_batch.numpy()
-                    tpcfs_batch = None
-                
-                    halo_batch, y_batch, tpcfs_batch = split_batches(
-                        num_local_devices, halo_batch, y_batch, tpcfs_batch
+                    halo_val_batch, y_val_batch, tpcfs_val_batch = split_batches(
+                        num_local_devices, halo_val_batch, y_val_batch, tpcfs_val_batch
                     )
                     outputs, metrics = eval_step(
-                        pstate, halo_batch, y_batch, tpcfs_batch, apply_pbc, n_radial_basis, r_max, use_3d_distances
+                        pstate, halo_val_batch, y_val_batch, tpcfs_val_batch, apply_pbc, n_radial_basis, r_max, use_3d_distances
                     )
-                    test_loss = unreplicate(metrics["loss"])
-                    running_test_loss += test_loss
-                avg_test_loss = running_test_loss/(n_test // n_batch)
+                    val_loss = unreplicate(metrics["loss"])
+                    running_val_loss += val_loss
+                    count +=1 
+                avg_val_loss = running_val_loss/count
 
-                test_loss_ckp = avg_test_loss
-            else:
-                tag = ""
+                if avg_val_loss.mean() < best_val:
+                    best_val = avg_val_loss.mean()
+                    best_vals = avg_val_loss
+                    best_state = pstate
+                    tag = " (best)"
+
+                    test_iter = iter(test_dataset)
+                    running_test_loss = np.zeros((1,2))
+                    count = 0
+                    for halo_test_batch, y_test_batch, tpcfs_test_batch in test_iter:
+                        halo_test_batch, y_test_batch, tpcfs_test_batch = halo_test_batch.numpy(), y_test_batch.numpy(), tpcfs_test_batch.numpy()
+                        if use_tpcf != 'none':
+                            tpcfs_test_batch = tpcfs_test_batch[:, tpcf_idx]
+                        else:
+                            tpcfs_test_batch = None
+
+                        halo_test_batch, y_test_batch, tpcfs_test_batch = split_batches(
+                            num_local_devices, halo_test_batch, y_test_batch, tpcfs_test_batch
+                        )
+                        test_outputs, metrics = eval_step(
+                            pstate, halo_test_batch, y_test_batch, tpcfs_test_batch, apply_pbc, n_radial_basis, r_max, use_3d_distances
+                        )
+                        test_loss = unreplicate(metrics["loss"])
+                        running_test_loss += test_loss
+                        count += 1
+                    avg_test_loss = running_test_loss/count
+
+                    test_loss_ckp = avg_test_loss.mean()
+                else:
+                    tag = ""
 
             
-            steps.set_postfix_str('avg loss: {:.5f}, val_loss: {:.5f}, ckp_test_loss: {:.5F}'.format(avg_train_loss,
-                                                                                                   val_loss,
+            steps.set_postfix_str('train_loss: {:.5f}, avg_val_loss: {:.5f}, avg_ckp_test_loss: {:.5F}'.format(train_loss.mean(),
+                                                                                                   avg_val_loss.mean(),
                                                                                                    test_loss_ckp))
-            losses.append(avg_train_loss)
+            losses.append(train_loss)
             val_losses.append(avg_val_loss)
 
             # early_stop = early_stop.update(avg_val_loss)
@@ -519,18 +527,49 @@ def run_expt(
         )
         
     if plotting:
-        plt.scatter(np.vstack(y_test), outputs, color='firebrick')
-        plt.plot(np.vstack(y_test), np.vstack(y_test), color='gray')
-        plt.title('True vs. predicted y')
-        plt.xlabel('True')
-        plt.ylabel('Predicted')
-        plt.savefig(current_experiment_dir / "y_preds.png")
+        y_test_batch = y_test_batch.reshape((batch_size, -1))
+        test_outputs = test_outputs.reshape((batch_size, -1))
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4), dpi=300)
+        ax1.scatter(np.vstack(y_test_batch[:, 0]), test_outputs[:, 0], color='firebrick')
+        ax1.plot(np.vstack(y_test_batch[:, 0]), np.vstack(y_test_batch[:, 0]), color='gray')
+        ax1.set_title('Omega_m Predictions')
+        ax1.set_xlabel('True')
+        ax1.set_ylabel('Predicted')
+
+        ax2.scatter(np.vstack(y_test_batch[:, 1]), test_outputs[:, 1], color='firebrick')
+        ax2.plot(np.vstack(y_test_batch[:, 1]), np.vstack(y_test_batch[:, 1]), color='gray')
+        ax2.set_title('sigma_8 Predictions')
+        ax2.set_xlabel('True')
+        fig.savefig(current_experiment_dir / "y_preds.png")
         
     np.save(current_experiment_dir / "train_losses.npy", losses)
     np.save(current_experiment_dir / "val_losses.npy", val_losses)
+
+    if save_model:
+        device_cpu = jax.devices('cpu')[0]
+        with jax.default_device(device_cpu):
+            loss_dict = {
+                "train_loss": np.array(losses),
+                'val_loss': np.array(val_losses),
+                'test_loss': np.array(test_loss_ckp),
+            }
+            best_state = unreplicate(best_state)
+            checkpoints.save_checkpoint(
+                ckpt_dir=str(current_experiment_dir),
+                target=best_state,
+                step=step,
+                overwrite=True,
+            )
+            with open(f"{current_experiment_dir}/loss_dict.pkl", "wb") as f:
+                pickle.dump(loss_dict, f)
+            with open(f"{current_experiment_dir}/results.txt", "w") as text_file:
+                text_file.write(f"Train loss: {losses[-1]}\n")
+                text_file.write(f"Val loss: {best_vals}\n")
+                text_file.write(f"Test loss: {test_loss_ckp}\n")
+        
     
-    
-def main(model, feats, target, lr, decay, steps, batch_size, n_radial_basis, use_tpcf, k, radius):
+def main(model, feats, lr, decay, steps, batch_size, n_train, use_tpcf, k):
     if model == 'MLP':
         MLP_PARAMS['d_hidden'] = MLP_PARAMS['feature_sizes'][0]
         params = MLP_PARAMS
@@ -543,7 +582,6 @@ def main(model, feats, target, lr, decay, steps, batch_size, n_radial_basis, use
     elif model == "NequIP":
         params = NEQUIP_PARAMS
     elif model == "DiffPool":
-        # GNN_PARAMS['task'] = 'node'
         DIFFPOOL_PARAMS["gnn_kwargs"] = {
             "d_hidden": 64,
             "n_layers": 3,
@@ -569,16 +607,14 @@ def main(model, feats, target, lr, decay, steps, batch_size, n_radial_basis, use
     run_expt(
         model,
         feats,
-        target,
         params,
         data_dir,
         learning_rate=lr,
         weight_decay=decay,
         n_steps=steps,
-        n_batch=batch_size,
-        n_radial_basis=n_radial_basis,
+        batch_size=batch_size,
+        n_train=n_train,
         use_tpcf=use_tpcf,
-        radius=radius
     )
 
 if __name__ == "__main__":
@@ -587,19 +623,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--feats", help="Features to use", default="pos", choices=["pos", "all"]
     )
-    parser.add_argument(
-        "--target", help="Target to predict", default="Omega_m", choices=["Omega_m", "sigma_8"]
-    )
-    parser.add_argument("--lr", type=float, help="Learning rate", default=1e-4)
+    parser.add_argument("--lr", type=float, help="Learning rate", default=3e-4)
     parser.add_argument("--decay", type=float, help="Weight decay", default=1e-5)
     parser.add_argument("--steps", type=int, help="Number of steps", default=5000)
     parser.add_argument("--batch_size", type=int, help="Batch size", default=32)
-    parser.add_argument(
-        "--n_radial_basis",
-        type=int,
-        help="Number of radial basis functions.",
-        default=0,
-    )
+    parser.add_argument("--n_train", type=int, help="Number of training samples", default=1000)
 
     parser.add_argument(
         "--use_tpcf",
@@ -610,12 +638,6 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--k", type=int, help="Number of neighbors for kNN graph", default=10
-    )
-    parser.add_argument(
-        "--radius",
-        type=float,
-        help="Use radial cutoff to build graph",
-        default=None,
     )
     args = parser.parse_args()
 

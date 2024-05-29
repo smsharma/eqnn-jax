@@ -37,7 +37,8 @@ def get_halo_dataset(batch_size=64,
                      return_mean_std=False,
                      standardize=True,
                      seed=42,
-                     tfrecords_path='/n/holystore01/LABS/iaifi_lab/Lab/quijote_bsq_tfrecords'):
+                     tfrecords_path='/home/jballa/galaxies/quijote_tfrecords',
+                     num_local_devices=4):
 
     files = tf.io.gfile.glob(f"{tfrecords_path}/halos*{split}*.tfrecord")
     dataset = tf.data.TFRecordDataset(files)
@@ -47,6 +48,7 @@ def get_halo_dataset(batch_size=64,
         num_total = num_samples  # Adjust num_total if num_samples is specified
     else:
         num_total = sum(1 for _ in tf.data.TFRecordDataset(files))  # This could be inefficient for large datasets
+        num_total = num_total - (num_total % batch_size)
 
     dataset = dataset.map(partial(_parse_function, features=features, params=params))
 
@@ -57,6 +59,9 @@ def get_halo_dataset(batch_size=64,
         mean_params = tf.constant([MEAN_PARAMS_DICT[f] for f in params], dtype=tf.float32)
         std_params = tf.constant([STD_PARAMS_DICT[f] for f in params], dtype=tf.float32)
         dataset = dataset.map(lambda x, p: ((x - mean) / std, (p - mean_params) / std_params))
+
+    if batch_size is None:
+        batch_size = num_total
 
     dataset = dataset.batch(batch_size)
     if split == 'train':
