@@ -510,17 +510,17 @@ if __name__ == "__main__":
             jnp.where(mask, (pred_batch - halo_batch[..., 3:6]) ** 2, 0.0)
         ) / jnp.sum(mask)
 
-    # iterators, std = get_iterators(tfrecords_path=tfrecords_path, training_set_size=args.training_set_size, batch_size=batch_size,)
-    # print(f'Training GNN with {args.training_set_size} samples and {args.fraction_masked} masked values')
-    # train_model(
-    #     iterators,
-    #     model=gnn,
-    #     n_steps=n_steps,
-    #     fraction_masked=fraction_masked,
-    #     num_local_devices=num_local_devices,
-    #     save_model=True,
-    #     ckpt_dir= output_path / f"gnn_{args.training_set_size}_f{fraction_masked:.1f}",
-    # )
+    iterators, std = get_iterators(tfrecords_path=tfrecords_path, training_set_size=args.training_set_size, batch_size=batch_size,)
+    print(f'Training GNN with {args.training_set_size} samples and {args.fraction_masked} masked values')
+    train_model(
+        iterators,
+        model=gnn,
+        n_steps=n_steps,
+        fraction_masked=fraction_masked,
+        num_local_devices=num_local_devices,
+        save_model=True,
+        ckpt_dir= output_path / f"gnn_{args.training_set_size}_f{fraction_masked:.1f}",
+    )
     iterators, std = get_iterators(
         tfrecords_path=tfrecords_path,
         training_set_size=args.training_set_size,
@@ -555,27 +555,27 @@ if __name__ == "__main__":
         fraction_masked=fraction_masked,
         num_local_devices=num_local_devices,
         save_model=True,
-        ckpt_dir=output_path / f"gnn_{args.training_set_size}_f{fraction_masked:.1f}",
+        ckpt_dir=output_path / f"nequip_l2_{args.training_set_size}_f{fraction_masked:.1f}",
     )
-    # print(f'Training SEGNN with {args.training_set_size} samples and {args.fraction_masked} masked values')
-    # iterators, std = get_iterators(tfrecords_path=tfrecords_path, training_set_size=args.training_set_size, batch_size=batch_size,)
-    # train_model(
-    #     iterators,
-    #     model=segnn_model,
-    #     n_steps=n_steps,
-    #     fraction_masked=fraction_masked,
-    #     num_local_devices=num_local_devices,
-    #     save_model=True,
-    #     ckpt_dir= output_path / f"segnn_{args.training_set_size}_f{fraction_masked:.1f}",
-    # )
-    # print(f'Training SEGNN lmax=2 with {args.training_set_size} samples and {args.fraction_masked} masked values')
-    # iterators, std = get_iterators(training_set_size=args.training_set_size, batch_size=batch_size,)
-    # train_model(
-    #     iterators,
-    #     model=segnn_model_lmax2,
-    #     n_steps=n_steps,
-    #     fraction_masked=fraction_masked,
-    #     num_local_devices=num_local_devices,
-    #     save_model=True,
-    #     ckpt_dir= output_path / f"segnn_l2_{args.training_set_size}",
-    # )
+    print(f'Training SEGNN with {args.training_set_size} samples and {args.fraction_masked} masked values')
+    iterators, std = get_iterators(tfrecords_path=tfrecords_path, training_set_size=args.training_set_size, batch_size=batch_size,)
+    train_model(
+        iterators,
+        model=segnn_model,
+        n_steps=n_steps,
+        fraction_masked=fraction_masked,
+        num_local_devices=num_local_devices,
+        save_model=True,
+        ckpt_dir= output_path / f"segnn_{args.training_set_size}_f{fraction_masked:.1f}",
+    )
+    print(f'Training SEGNN lmax=2 with {args.training_set_size} samples and {args.fraction_masked} masked values')
+    iterators, std = get_iterators(training_set_size=args.training_set_size, batch_size=batch_size,)
+    train_model(
+        iterators,
+        model=segnn_model_lmax2,
+        n_steps=n_steps,
+        fraction_masked=fraction_masked,
+        num_local_devices=num_local_devices,
+        save_model=True,
+        ckpt_dir= output_path / f"segnn_l2_{args.training_set_size}",
+    )
