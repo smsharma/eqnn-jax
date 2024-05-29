@@ -54,7 +54,10 @@ def get_edge_mlp_updates(
 
         # Radial
         d_ij = jnp.linalg.norm(rel_distance.array, axis=-1)
-        R_ij = e3nn.bessel(d_ij, n_radial_basis, r_cutoff)
+        if n_radial_basis > 0:
+            R_ij = e3nn.bessel(d_ij, n_radial_basis, r_cutoff)
+        else:
+            R_ij = d_ij[...,None]
 
         activation_nn = getattr(nn, activation)
         W_R_ij = MultiLayerPerceptron(

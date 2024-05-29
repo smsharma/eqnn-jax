@@ -21,10 +21,10 @@ def compute_tpcf(positions, box_size=1000.,):
                 los="z",
             )(ells=[0])[0]
 
-def read_halos(data_dir, snapshot=10, n_halos=5000,):
+def read_halos(data_dir, snapshot=10, num_halos=5000,):
     data = np.loadtxt(data_dir / f'out_{snapshot}.list')
     # get the n_halos heaviest ones
-    data = data[np.argsort(data[:,21])[-n_halos:]]
+    data = data[np.argsort(data[:,21])[-num_halos:]]
     return pd.DataFrame(
         {
             'x': data[:,8],
@@ -40,6 +40,103 @@ def read_halos(data_dir, snapshot=10, n_halos=5000,):
             'Rvir': data[:,5],
         },
     )
+
+def read_halos_consistent_trees(data_dir, scale_factor=1., num_halos=5000, host_halos=True, keep_columns = ["x", "y", "z", "v_x", "v_y", "v_z", "J_x", "J_y", "J_z", "M200c", "Rvir"]):
+    column_names = [
+        "scale",
+        "id",
+        "desc_scale",
+        "desc_id",
+        "num_prog",
+        "pid",
+        "upid",
+        "desc_pid",
+        "phantom",
+        "sam_Mvir",
+        "Mvir",
+        "Rvir",
+        "rs",
+        "vrms",
+        "mmp?",
+        "scale_of_last_MM",
+        "vmax",
+        "x",
+        "y",
+        "z",
+        "v_x",
+        "v_y",
+        "v_z",
+        "J_x",
+        "J_y",
+        "J_z",
+        "Spin",
+        "Breadth_first_ID",
+        "Depth_first_ID",
+        "Tree_root_ID",
+        "Orig_halo_ID",
+        "Snap_idx",
+        "Next_coprogenitor_depthfirst_ID",
+        "Last_progenitor_depthfirst_ID",
+        "Last_mainleaf_depthfirst_ID",
+        "Tidal_Force",
+        "Tidal_ID",
+        "Rs_Klypin",
+        "Mvir_all",
+        "M200b",
+        "M200c",
+        "M500c",
+        "M2500c",
+        "Xoff",
+        "Voff",
+        "Spin_Bullock",
+        "b_to_a",
+        "c_to_a",
+        "Ax",
+        "Ay",
+        "Az",
+        "b_to_a_500c",
+        "c_to_a_500c",
+        "Ax_500c",
+        "Ay_500c",
+        "Az_500c",
+        "T_U",
+        "M_pe_Behroozi",
+        "M_pe_Diemer",
+        "Halfmass_Radius",
+        "Macc",
+        "Mpeak",
+        "Vacc",
+        "Vpeak",
+        "Halfmass_Scale",
+        "Acc_Rate_Inst",
+        "Acc_Rate_100Myr",
+        "Acc_Rate_1Tdyn",
+        "Acc_Rate_2Tdyn",
+        "Acc_Rate_Mpeak",
+        "Acc_Log_Vmax_Inst",
+        "Acc_Log_Vmax_1Tdyn",
+        "Mpeak_Scale",
+        "Acc_Scale",
+        "First_Acc_Scale",
+        "First_Acc_Mvir",
+        "First_Acc_Vmax",
+        "Vmax_Mpeak",
+        "Tidal_Force_Tdyn",
+        "Log_Vmax_Vmax_max_Tdyn_TMpeak",
+        "Time_to_future_merger",
+        "Future_merger_MMP_ID",
+    ]
+    filename = data_dir / f"hlists/hlist_{scale_factor:.5f}.list"
+    df = pd.read_csv(
+        filename, delim_whitespace=True, comment="#", names=column_names, header=None
+    )
+    if host_halos:
+        df = df[df["upid"] == -1]
+    df= df.sort_values(by='M200c', ascending=False)
+    df = df.iloc[:num_halos]
+    if keep_columns is not None:
+        df = df[keep_columns]
+    return df
 
 def read_cosmologies():
     cosmo_url = "https://raw.githubusercontent.com/franciscovillaescusa/Quijote-simulations/master/BSQ/BSQ_params.txt"
@@ -69,14 +166,15 @@ def serialize_example(features, tpcf_features, params, params_names):
     return example_proto.SerializeToString()
 
 
-
-
-def write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos):
+def write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos, use_consistent_trees):
     print(f"Starting to write TFRecord: {tfrecord_file}")
     with tf.io.TFRecordWriter(tfrecord_file) as writer:
         for idx in tqdm(indices, desc=f'Writing {tfrecord_file}'):
             try:
-                features = read_halos(data_dir / f'{idx}', snapshot, n_halos)
+                if use_consistent_trees:
+                    features = read_halos_consistent_trees(data_dir / f'{idx}', snapshot, num_halos=n_halos)
+                else:
+                    features = read_halos(data_dir / f'{idx}', snapshot, num_halos=n_halos)
                 tpcf_features = compute_tpcf(features[['x', 'y', 'z']].values)
                 params = params_df.iloc[idx].values
                 example = serialize_example(features, tpcf_features, params, params_names)
@@ -84,7 +182,7 @@ def write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos):
             except Exception as e:
                 print(f"Error writing index {idx} to {tfrecord_file}: {e}")
 
-def process_data_to_tfrecords(params_df, data_dir, tfrecords_path, num_tfrecords=20, num_tfrecords_val=1, num_tfrecords_test=1, snapshot=10, n_halos=5000):
+def process_data_to_tfrecords(params_df, data_dir, tfrecords_path, num_tfrecords=20, use_consistent_trees=False,num_tfrecords_val=1, num_tfrecords_test=1, snapshot=10, n_halos=5000):
     """
     Converts data from the Quijote simulations to a specified number of TFRecord files.
     """
@@ -96,30 +194,40 @@ def process_data_to_tfrecords(params_df, data_dir, tfrecords_path, num_tfrecords
     files_per_tfrecord = int(np.ceil(num_files / (num_tfrecords + num_tfrecords_val + num_tfrecords_test)))
     print(f'{files_per_tfrecord} files per tfrecord')
 
-    for i in range(45,num_tfrecords):
+    for i in range(num_tfrecords):
         tfrecord_file = os.path.join(tfrecords_path, f'halos_train_{i + 1}.tfrecord')
         indices = range(i * files_per_tfrecord, min((i + 1) * files_per_tfrecord, num_files))
-        write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos)
+        write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos, use_consistent_trees=use_consistent_trees,)
 
     for i in range(num_tfrecords_val):
         tfrecord_file = os.path.join(tfrecords_path, f'halos_val_{i + 1}.tfrecord')
         indices = range((num_tfrecords + i) * files_per_tfrecord, min((num_tfrecords + i + 1) * files_per_tfrecord, num_files))
-        write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos)
+        write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos, use_consistent_trees=use_consistent_trees,)
 
     for i in range(num_tfrecords_test):
         tfrecord_file = os.path.join(tfrecords_path, f'halos_test_{i + 1}.tfrecord')
         indices = range((num_tfrecords + num_tfrecords_val + i) * files_per_tfrecord, min((num_tfrecords + num_tfrecords_val + i + 1) * files_per_tfrecord, num_files))
-        write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos)
+        write_tfrecords(tfrecord_file, indices, data_dir, snapshot, n_halos, use_consistent_trees=use_consistent_trees,)
 
 
 if __name__ == '__main__':
-    data_dir = Path('/pscratch/sd/c/cuesta/quijote_bsq/')
+    use_consistent_trees = True
+    if use_consistent_trees:
+        data_dir = Path('/pscratch/sd/c/cuesta/quijote_bsq_consistent_trees/')
+        tfrecords_path = Path('/pscratch/sd/c/cuesta/quijote_tfrecords_consistent_trees/')
+        snapshot = 1.
+    else:
+        data_dir = Path('/pscratch/sd/c/cuesta/quijote_bsq/')
+        tfrecords_path = Path('/pscratch/sd/c/cuesta/quijote_tfrecords/')
+        snapshot = 10
     params_names = ['Omega_m', 'Omega_b', 'h', 'n_s', 'sigma_8']
     params_df = read_cosmologies()
 
     process_data_to_tfrecords(
         params_df,
         num_tfrecords=50,
-        data_dir = Path('/pscratch/sd/c/cuesta/quijote_bsq/'),
-        tfrecords_path = Path('/pscratch/sd/c/cuesta/quijote_tfrecords/'),
+        use_consistent_trees=use_consistent_trees,
+        data_dir = data_dir,
+        tfrecords_path = tfrecords_path,
+        snapshot=snapshot,
     )
