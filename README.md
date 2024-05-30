@@ -1,6 +1,7 @@
 # $E(3)$ Equivariant Graph Neural Networks in Jax
 
 [![License: CC BY 4.0](https://img.shields.io/badge/License-CC--4.0--BY-red.svg)](https://creativecommons.org/licenses/by/4.0/deed.en)
+[![Run Tests](https://github.com/smsharma/eqnn-jax/actions/workflows/tests.yml/badge.svg)](https://github.com/smsharma/eqnn-jax/actions/workflows/tests.yml)
 
 Implementation of $E(3)$ equivariant graph neural networks in Jax.
 
