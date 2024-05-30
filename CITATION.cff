@@ -1,0 +1,13 @@
+cff-version: 0.1.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Balla"
+  given-names: "Julia"
+- family-names: "Mishra-Sharma"
+  given-names: "Siddharth"
+- family-names: "Cuesta-Lzaro"
+  given-names: "Carolina"
+title: "eqnn-jax"
+version: 0.1.0
+date-released: 2024-05-29
+url: "https://github.com/smsharma/eqnn-jax"

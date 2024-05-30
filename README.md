@@ -1,19 +1,25 @@
-# Equivariant Neural Networks in Jax
+# $E(3)$ Equivariant Graph Neural Networks in Jax
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
+[![License: CC BY 4.0](https://img.shields.io/badge/License-CC--4.0--BY-red.svg)](https://creativecommons.org/licenses/by/4.0/deed.en)
 
-> [!NOTE]  
-> Work in progress. So far, implements EGNN, SEGNN, NequIP.
+Implementation of $E(3)$ equivariant graph neural networks in Jax.
 
-## TODO
+## Models
 
-- [ ] Double check regroup/simplify and gate scalars spec
-- [ ] Move distance vector to privileged position as attribute
+The following equivariant models are implemented:
 
-> [!CAUTION]  
-> Old README below.
+- [EGNN](./models/egnn.py) ([Satorras et al 2021](https://arxiv.org/abs/2102.09844))
+- [SEGNN](./models/segnn.py) ([Brandstetter et al 2021](https://arxiv.org/abs/2110.02905))
+- [NequIP](./models/nequip.py) ([Batzner et al 2021](https://arxiv.org/abs/2101.03164))
 
-Jax implementation of E(n) Equivariant Graph Neural Network (EGNN) following [Satorras et al (2021)](https://arxiv.org/abs/2102.09844).
+Additionally, the following non-equivariant models are implemented:
+
+- [Graph Network](./models/gnn.py) ([Battaglia et al 2018](https://arxiv.org/abs/1806.01261))
+- [PointNet++](./models/pointnet.py) ([Qi et al 2017](https://arxiv.org/abs/1706.02413))
+- [DiffPool](./models/diffpool.py) ([Ying et al 2018](https://arxiv.org/abs/1806.08804))
+- [Set Transformer](./models/transformer.py) ([Lee et al 2019](https://arxiv.org/abs/1810.00825))
+
+## Requirements
 
 ## Basic usage
 
@@ -33,8 +39,6 @@ graph_out, params = model.init_with_output(rng, graph)  # graph is a jraph.Graph
 
 Minimal example in `minimal.py`. Full example with equivariance test in `notebooks/equivariance_test.ipynb`.
 
-## Implementation notes
+## Attribution
 
-- The model takes either 3-D coordinates (`positions_only=True`) or 3-D coordinates and velocities (`positions_only=False`). Additional scalar nodes features and global graph attributes are handled separately.
-- The position and velocity updates (for the velocity-included version) are coupled at the moment as in the original paper (Eq. 7)
-- Can optionally use Fourier projections of relative distances with `use_fourier_features=True`
+[segnn-jax](https://github.com/gerkone/segnn-jax)
