@@ -5,7 +5,7 @@ authors:
   given-names: "Julia"
 - family-names: "Mishra-Sharma"
   given-names: "Siddharth"
-- family-names: "Cuesta-Lzaro"
+- family-names: "Cuesta-Lazaro"
   given-names: "Carolina"
 title: "eqnn-jax"
 version: 0.1.0
