@@ -85,7 +85,8 @@ def get_edge_mlp_updates(
             r_ij = apply_pbc(r_ij)
 
         d_ij = jnp.sqrt(jnp.sum(r_ij ** 2, axis=1, keepdims=False))
-        d_ij = e3nn.bessel(d_ij, n_radial_basis, r_max)
+        if n_radial_basis > 0:
+            d_ij = e3nn.bessel(d_ij, n_radial_basis, r_max)
         d_ij = d_ij.reshape(d_ij.shape[0], -1)
 
         # Get invariants

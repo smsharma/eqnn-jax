@@ -314,6 +314,9 @@ def build_graph(
     else:
         edges = None
 
+    if len(edges.shape) < 3:
+        edges = np.expand_dims(edges, axis=0)
+
     return jraph.GraphsTuple(
         n_node=n_node,
         n_edge=n_edge,
