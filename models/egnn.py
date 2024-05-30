@@ -85,9 +85,13 @@ def get_edge_mlp_updates(
             r_ij = apply_pbc(r_ij)
 
         d_ij = jnp.sqrt(jnp.sum(r_ij ** 2, axis=1, keepdims=False))
-        d_ij = e3nn.bessel(d_ij, n_radial_basis, r_max)
-        d_ij = d_ij.reshape(d_ij.shape[0], -1)
 
+        if n_radial_basis > 0:
+            d_ij = e3nn.bessel(d_ij, n_radial_basis, r_max)
+            d_ij = d_ij.reshape(d_ij.shape[0], -1)
+        else:
+            d_ij = d_ij.reshape(d_ij.shape[0], 1)
+                
         # Get invariants
         message_scalars = d_ij
 
@@ -243,7 +247,7 @@ class EGNN(nn.Module):
     soft_edges: bool = True  # Scale edges by a learnable function
     positions_only: bool = False  # (pos, vel, scalars) vs (pos, scalars)
     tanh_out: bool = False
-    n_radial_basis: int = 32  # Number of radial basis functions for distance
+    n_radial_basis: int = 16  # Number of radial basis functions for distance
     r_max: float = 0.3  # Maximum distance for radial basis functions
     decouple_pos_vel_updates: bool = False  # Use extra MLP to decouple position and velocity updates
     message_passing_agg: str = "sum"  # "sum", "mean", "max"

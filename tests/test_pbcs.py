@@ -2,11 +2,10 @@ import jax
 import jax.numpy as jnp
 import sys
 
-sys.path.append("../models")
 sys.path.append("../")
 
 import pytest
-from utils.graph_utils import get_apply_pbc, build_graph 
+from models.utils.graph_utils import get_apply_pbc, build_graph 
 
 def test__apply_pbcs_on_graph():
     # Test that graph standarized and not standarized agrees
