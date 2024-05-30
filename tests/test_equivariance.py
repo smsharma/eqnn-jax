@@ -1,6 +1,5 @@
 import sys
 
-sys.path.append("../models")
 sys.path.append("../")
 
 import jax
@@ -11,8 +10,9 @@ import jraph
 
 from e3nn_jax import IrrepsArray
 from e3nn_jax import Irreps
-from utils.graph_utils import nearest_neighbors, rotate_representation
-from utils.equivariant_graph_utils import get_equivariant_graph
+
+from models.utils.graph_utils import nearest_neighbors, rotate_representation
+from models.utils.equivariant_graph_utils import get_equivariant_graph
 
 from models.gnn import GNN
 from models.egnn import EGNN
