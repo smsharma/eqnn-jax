@@ -5,7 +5,6 @@ on:
     branches: [main]  # Trigger the workflow on pushes to the main branch
   pull_request:
     branches: [main]  # Trigger the workflow on pull requests to the main branch
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,10 +19,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Set up Python path
-        run: echo "PYTHONPATH=." >> $GITHUB_ENV
   
       - name: Run tests
-        run: pytest tests/
-
+        run: |
+          cd tests
+          pytest .
+  
