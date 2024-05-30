@@ -20,7 +20,18 @@ Additionally, the following non-equivariant models are implemented:
 - [DiffPool](./models/diffpool.py) ([Ying et al 2018](https://arxiv.org/abs/1806.08804))
 - [Set Transformer](./models/transformer.py) ([Lee et al 2019](https://arxiv.org/abs/1810.00825))
 
-## Requirements
+## Requirements and tests
+
+To install requirements:
+```
+pip install -r requirements.txt
+```
+
+To run tests (testing equivariance and periodic boundary conditions):
+```
+cd tests
+pytest .
+``` 
 
 ## Basic usage and examples
 
