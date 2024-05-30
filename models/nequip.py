@@ -54,7 +54,10 @@ def get_edge_mlp_updates(
 
         # Radial
         d_ij = jnp.linalg.norm(rel_distance.array, axis=-1)
-        R_ij = e3nn.bessel(d_ij, n_radial_basis, r_cutoff)
+        if n_radial_basis > 0:
+            R_ij = e3nn.bessel(d_ij, n_radial_basis, r_cutoff)
+        else:
+            R_ij = d_ij[...,None]
 
         activation_nn = getattr(nn, activation)
         W_R_ij = MultiLayerPerceptron(
@@ -71,7 +74,7 @@ def get_edge_mlp_updates(
     return update_fn
 
 
-def get_node_mlp_updates(irreps_out: Irreps = None, n_edges: int = 20):
+def get_node_mlp_updates(irreps_out: Irreps = None, n_edges: int = 20, residual: bool = True):
     def update_fn(
         nodes: jnp.array, senders: jnp.array, receivers: jnp.array, globals: jnp.array
     ) -> jnp.array:
@@ -79,8 +82,13 @@ def get_node_mlp_updates(irreps_out: Irreps = None, n_edges: int = 20):
         irreps = irreps_out.filter(keep=m_i.irreps)
         gate_irreps = Irreps(f"{irreps.num_irreps - irreps.count('0e')}x0e")
         _irreps_out = (gate_irreps + irreps).regroup()
-        m_i = Linear(_irreps_out)(m_i) + Linear(_irreps_out)(nodes)  # Skip
-        nodes = e3nn.gate(m_i)
+        if residual:
+            m_i = Linear(_irreps_out)(m_i) + Linear(_irreps_out, force_irreps_out=True,)(nodes)  # Skip
+        else:
+            m_i = Linear(_irreps_out)(m_i) 
+        nodes = e3nn.gate(
+            m_i,
+        )
         return nodes
 
     return update_fn
@@ -101,6 +109,7 @@ class NequIP(nn.Module):
     l_max: int = 1  # Maximum spherical harmonic degree for steerable geometric features and hidden features
     sphharm_norm: str = "component"  # Normalization for spherical harmonics; "component", "integral", "norm"
     irreps_out: Optional[Irreps] = None  # Output irreps; defaults to input irreps
+    residual: bool = True
 
     @nn.compact
     def __call__(
@@ -139,6 +148,7 @@ class NequIP(nn.Module):
             update_node_fn = get_node_mlp_updates(
                 irreps_out=irreps_hidden,
                 n_edges=graphs.n_edge,
+                residual=self.residual,
             )
 
             # Apply steerable EGCL

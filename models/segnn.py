@@ -255,12 +255,12 @@ class SEGNN(nn.Module):
             # print(graphs.nodes.array.std())
 
         if self.task == "node":  # If output irreps differ from input irreps, project to output irreps
-            if output_irreps != irreps_in:
-                graphs = self._decode(
-                    hidden_irreps=hidden_irreps,
-                    graph=graphs,
-                    steerable_node_attrs=steerable_node_attrs,
-                )
+            #if output_irreps != irreps_in:
+            graphs = self._decode(
+                hidden_irreps=hidden_irreps,
+                graph=graphs,
+                steerable_node_attrs=steerable_node_attrs,
+            )
             return graphs
         elif self.task == "graph":  # Aggregate residual node features
             
