@@ -181,7 +181,7 @@ def test_not_equivariant_gnn(
             n_layers=3,
             activation="gelu",
             task="node",
-            d_output=None,
+            n_outputs=None,
         )
     )
     rng = jax.random.PRNGKey(0)
@@ -296,7 +296,6 @@ def test_equivariant_segnn(node_features):
             message_passing_steps=2,
             d_hidden=32,
             task="node",
-            intermediate_hidden_irreps=True,
             residual=True,
             output_irreps="1o + 1o + 1x0e",
         )
@@ -322,7 +321,6 @@ def test_invariant_segnn(node_features):
             message_passing_steps=3,
             d_hidden=32,
             task="graph",
-            intermediate_hidden_irreps=True,
             residual=True,
             output_irreps="1x0e",
         )

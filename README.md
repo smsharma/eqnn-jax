@@ -21,24 +21,10 @@ Additionally, the following non-equivariant models are implemented:
 
 ## Requirements
 
-## Basic usage
+## Basic usage and examples
 
-```py
-from models.egnn import EGNN
-
-model = EGNN(message_passing_steps=3,  # Number of message-passing rounds
-    d_hidden=32, n_layers=3, activation="gelu",  # Edge/position/velocity/scalar-update MLP attributes 
-    positions_only=True,  # Position-only (3 + scalar features) or including velocities (3 + 3 + scalar features) 
-    use_fourier_features=True,  # Whether to use a Fourier feature projection of input relative coordinates
-    tanh_out=False)  # Tanh-activate the position-update scalars, i.e. (x_i - x_j) * Tanh(scalars) which sometimes helps with stability
-
-rng = jax.random.PRNGKey(42)
-graph_out, params = model.init_with_output(rng, graph)  # graph is a jraph.GraphsTuple 
-```
-## Examples
-
-Minimal example in `minimal.py`. Full example with equivariance test in `notebooks/equivariance_test.ipynb`.
+See [`notebooks/examples.ipynb`](./notebooks/examples.ipynb) for example usage of GNN, SEGNN, NequIP, and EGNN.
 
 ## Attribution
 
-[segnn-jax](https://github.com/gerkone/segnn-jax)
+See [CITATION.cff](./CITATION.cff) for citation information. The implementation of SEGNN was partially inspired by [segnn-jax](https://github.com/gerkone/segnn-jax).
