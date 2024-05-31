@@ -61,7 +61,7 @@ def get_halo_dataset(batch_size=64,
                      return_mean_std=False,
                      standardize=True,
                      seed=42,
-                     tfrecords_path= '/home/jballa/galaxies/quijote_tfrecords_consistent_trees',
+                     tfrecords_path= '/quijote_tfrecords_consistent_trees',
                      include_tpcf=False
                      ):
 
