@@ -43,7 +43,7 @@ from models.diffpool import DiffPool
 from benchmarks.galaxies.dataset_large import get_halo_dataset, generate_tpcfs
 
 MLP_PARAMS = {
-    "feature_sizes": [1028, 1028, 1028, 2],
+    "feature_sizes": [128, 128, 128, 2],
 }
 
 GNN_PARAMS = {
@@ -69,8 +69,6 @@ EGNN_PARAMS = {
     "soft_edges": True,
     "positions_only": True,
     "tanh_out": False,
-    "n_radial_basis": 64,
-    "r_max": 0.6,
     "decouple_pos_vel_updates": True,
     "message_passing_agg": "mean",
     "readout_agg": "mean",
@@ -113,7 +111,7 @@ SEGNN_PARAMS = {
     "output_irreps": e3nn.Irreps("1x0e"),
     "readout_agg": "mean",
     "mlp_readout_widths": (4, 2, 2),
-    "l_max_hidden": 1,
+    "l_max_hidden": 2,
     "hidden_irreps": None,
     "residual": True,
 }
@@ -130,8 +128,6 @@ NEQUIP_PARAMS = {
     "mlp_readout_widths": [4, 2, 2],
     "task": "graph",
     "n_outputs": 2,
-    "n_radial_basis": 64,
-    "r_cutoff": 0.6,
 }
 
 class GraphWrapper(nn.Module):
@@ -353,6 +349,7 @@ def run_expt(
                                                                 seed=42,  # Random seed
                                                                 features=features,  # Features to include
                                                                 params=target,  # Parameters to include
+                                                                include_tpcf=True
                                                             )
     std = std.numpy()
     train_iter = iter(train_dataset)
@@ -366,7 +363,8 @@ def run_expt(
                                            return_mean_std=False,  
                                            seed=42,
                                            features=features, 
-                                           params=target
+                                           params=target,
+                                           include_tpcf=True
                                         )
 
     test_dataset, n_test = get_halo_dataset(batch_size=batch_size,  
@@ -376,7 +374,8 @@ def run_expt(
                                            return_mean_std=False,  
                                            seed=42,
                                            features=features, 
-                                           params=target
+                                           params=target,
+                                           include_tpcf=True
                                         )
 
     print('Train-Val-Test split:', n_train, n_val, n_test)
@@ -398,6 +397,14 @@ def run_expt(
 
     if model_name in ['EGNN', 'PointNet']:
         param_dict['apply_pbc'] = apply_pbc
+
+    if model_name == 'EGNN':
+        param_dict['n_radial_basis'] = n_radial_basis
+        param_dict['r_max'] = r_max
+    if model_name == 'NequIP':
+        param_dict['n_radial_basis'] = n_radial_basis
+        param_dict['r_cutoff'] = r_max
+
 
     graph = build_graph(
         halo_train[:2],
@@ -435,7 +442,7 @@ def run_expt(
     best_val = 1e10
     best_vals = None
     best_state = None
-    test_loss_ckp = 1e10
+    test_loss_ckp = None
     with trange(n_steps, ncols=120) as steps:
         train_iter = iter(train_dataset)
         for step in steps:
@@ -505,14 +512,14 @@ def run_expt(
                         count += 1
                     avg_test_loss = running_test_loss/count
 
-                    test_loss_ckp = avg_test_loss.mean()
+                    test_loss_ckp = avg_test_loss
                 else:
                     tag = ""
 
             
             steps.set_postfix_str('train_loss: {:.5f}, avg_val_loss: {:.5f}, avg_ckp_test_loss: {:.5F}'.format(train_loss.mean(),
                                                                                                    avg_val_loss.mean(),
-                                                                                                   test_loss_ckp))
+                                                                                                   test_loss_ckp.mean()))
             losses.append(train_loss)
             val_losses.append(avg_val_loss)
 
@@ -523,7 +530,7 @@ def run_expt(
             
         print(
             "Training done.\n"
-            f"Final checkpoint test loss {test_loss_ckp:.6f}.\n"
+            f"Final checkpoint test loss {test_loss_ckp}.\n"
         )
         
     if plotting:
