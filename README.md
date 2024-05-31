@@ -1,40 +1,42 @@
-# Equivariant Neural Networks in Jax
+# $E(3)$ Equivariant Graph Neural Networks in Jax
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
+[![License: CC BY 4.0](https://img.shields.io/badge/License-CC--4.0--BY-red.svg)](https://creativecommons.org/licenses/by/4.0/deed.en)
+[![Run Tests](https://github.com/smsharma/eqnn-jax/actions/workflows/tests.yml/badge.svg)](https://github.com/smsharma/eqnn-jax/actions/workflows/tests.yml)
 
-> [!NOTE]  
-> Work in progress. So far, implements EGNN, SEGNN, NequIP.
+Implementation of $E(3)$ equivariant graph neural networks in Jax.
 
-## TODO
+## Models
 
-- [ ] Double check regroup/simplify and gate scalars spec
-- [ ] Move distance vector to privileged position as attribute
+The following equivariant models are implemented:
 
-> [!CAUTION]  
-> Old README below.
+- [EGNN](./models/egnn.py) ([Satorras et al 2021](https://arxiv.org/abs/2102.09844))
+- [SEGNN](./models/segnn.py) ([Brandstetter et al 2021](https://arxiv.org/abs/2110.02905))
+- [NequIP](./models/nequip.py) ([Batzner et al 2021](https://arxiv.org/abs/2101.03164))
 
-Jax implementation of E(n) Equivariant Graph Neural Network (EGNN) following [Satorras et al (2021)](https://arxiv.org/abs/2102.09844).
+Additionally, the following non-equivariant models are implemented:
 
-## Basic usage
+- [Graph Network](./models/gnn.py) ([Battaglia et al 2018](https://arxiv.org/abs/1806.01261))
+- [PointNet++](./models/pointnet.py) ([Qi et al 2017](https://arxiv.org/abs/1706.02413))
+- [DiffPool](./models/diffpool.py) ([Ying et al 2018](https://arxiv.org/abs/1806.08804))
+- [Set Transformer](./models/transformer.py) ([Lee et al 2019](https://arxiv.org/abs/1810.00825))
 
-```py
-from models.egnn import EGNN
+## Requirements and tests
 
-model = EGNN(message_passing_steps=3,  # Number of message-passing rounds
-    d_hidden=32, n_layers=3, activation="gelu",  # Edge/position/velocity/scalar-update MLP attributes 
-    positions_only=True,  # Position-only (3 + scalar features) or including velocities (3 + 3 + scalar features) 
-    use_fourier_features=True,  # Whether to use a Fourier feature projection of input relative coordinates
-    tanh_out=False)  # Tanh-activate the position-update scalars, i.e. (x_i - x_j) * Tanh(scalars) which sometimes helps with stability
-
-rng = jax.random.PRNGKey(42)
-graph_out, params = model.init_with_output(rng, graph)  # graph is a jraph.GraphsTuple 
+To install requirements:
 ```
-## Examples
+pip install -r requirements.txt
+```
 
-Minimal example in `minimal.py`. Full example with equivariance test in `notebooks/equivariance_test.ipynb`.
+To run tests (testing equivariance and periodic boundary conditions):
+```
+cd tests
+pytest .
+``` 
 
-## Implementation notes
+## Basic usage and examples
 
-- The model takes either 3-D coordinates (`positions_only=True`) or 3-D coordinates and velocities (`positions_only=False`). Additional scalar nodes features and global graph attributes are handled separately.
-- The position and velocity updates (for the velocity-included version) are coupled at the moment as in the original paper (Eq. 7)
-- Can optionally use Fourier projections of relative distances with `use_fourier_features=True`
+See [`notebooks/examples.ipynb`](./notebooks/examples.ipynb) for example usage of GNN, SEGNN, NequIP, and EGNN.
+
+## Attribution
+
+See [CITATION.cff](./CITATION.cff) for citation information. The implementation of SEGNN was partially inspired by [segnn-jax](https://github.com/gerkone/segnn-jax).

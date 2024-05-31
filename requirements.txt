@@ -1,0 +1,5 @@
+pytest
+jax
+flax
+jraph
+e3nn-jax

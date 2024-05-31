@@ -305,7 +305,7 @@ def run_expt(
     use_pbcs=True,
     boxsize=1000.,
     use_edges=True,
-    n_radial_basis=0,
+    n_radial_basis=64,
     r_max=0.6,
     use_3d_distances=False,
     use_tpcf="none",
@@ -327,7 +327,7 @@ def run_expt(
     experiments_base_dir = Path(__file__).parent / "experiments/"
     d_hidden = param_dict["d_hidden"]
     experiment_id = (
-        f"{model_name}_N={n_train}_tpcf=" + use_tpcf + f'_bessel={n_radial_basis}'
+        f"{model_name}_N={n_train}_tpcf=" + use_tpcf
     )
 
     current_experiment_dir = experiments_base_dir / experiment_id
@@ -397,9 +397,14 @@ def run_expt(
 
     if model_name in ['EGNN', 'PointNet']:
         param_dict['apply_pbc'] = apply_pbc
-    if model_name in ['EGNN', 'NequIP']:
+
+    if model_name == 'EGNN':
         param_dict['n_radial_basis'] = n_radial_basis
         param_dict['r_max'] = r_max
+    if model_name == 'NequIP':
+        param_dict['n_radial_basis'] = n_radial_basis
+        param_dict['r_cutoff'] = r_max
+
 
     graph = build_graph(
         halo_train[:2],
