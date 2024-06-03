@@ -7,8 +7,8 @@ from pycorr import (
 
 
 # Mean and std for halos and cosmological parameters
-MEAN_HALOS_DICT = {'x': 499.91877075908684, 'y': 500.0947802559321,  'z': 499.964508664328,'Jx': 212560050888254.06,'Jy': 349712732356652.25, 'Jz': -100259775332585.12, 'vx': -0.0512854365234889, 'vy': -0.01263126442198149, 'vz': -0.06458034372345466, 'M200c': 321308383763206.9, 'Rvir': 1424.4071655758826}
-STD_HALOS_DICT = {'x': 288.71092533309235, 'y': 288.7525818573022, 'z': 288.70234893905575, 'Jx': 2.4294356933448945e+18, 'Jy': 2.3490019110577966e+18, 'Jz': 2.406422979830857e+18, 'vx': 344.0231468131901, 'vy': 343.9333673335964, 'vz': 344.071876710777, 'M200c': 405180433634974.75, 'Rvir': 298.14502916425675}
+MEAN_HALOS_DICT = {'x': 499.91877075908684, 'y': 500.0947802559321,  'z': 499.964508664328,'Jx': 212560050888254.06,'Jy': 349712732356652.25, 'Jz': -100259775332585.12, 'v_x': -0.0512854365234889, 'v_y': -0.01263126442198149, 'v_z': -0.06458034372345466, 'M200c': 321308383763206.9, 'Rvir': 1424.4071655758826}
+STD_HALOS_DICT = {'x': 288.71092533309235, 'y': 288.7525818573022, 'z': 288.70234893905575, 'Jx': 2.4294356933448945e+18, 'Jy': 2.3490019110577966e+18, 'Jz': 2.406422979830857e+18, 'v_x': 344.0231468131901, 'v_y': 343.9333673335964, 'v_z': 344.071876710777, 'M200c': 405180433634974.75, 'Rvir': 298.14502916425675}
 MEAN_PARAMS_DICT = {'Omega_m': 0.29994175, 'Omega_b': 0.049990308, 'h': 0.69996387, 'n_s': 0.9999161, 'sigma_8': 0.7999111}
 STD_PARAMS_DICT = {'Omega_m': 0.11547888, 'Omega_b': 0.017312417, 'h': 0.11543678, 'n_s': 0.115482554, 'sigma_8': 0.11545073}
 MEAN_TPCF_VEC = [1.47385902e+01, 4.52754450e+00, 1.89688166e+00, 1.00795493e+00,
@@ -22,7 +22,7 @@ STD_TPCF_VEC = [8.37356624, 2.36190046, 1.15493691, 0.73567994, 0.52609708, 0.40
                 0.16773013, 0.15968612, 0.15186733, 0.14234885, 0.13153203, 0.11954234,
                 0.10549666, 0.09024256, 0.07655078, 0.06350282, 0.05210615, 0.0426435]
 
-def _parse_function(proto, features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'vx', 'vy', 'vz', 'M200c'], 
+def _parse_function(proto, features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'v_x', 'v_y', 'v_z', 'M200c'], 
                     params=['Omega_m', 'Omega_b', 'h', 'n_s', 'sigma_8'],
                     include_tpcf=False):
     
@@ -56,12 +56,12 @@ def _parse_function(proto, features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'vx', 'vy'
 def get_halo_dataset(batch_size=64, 
                      num_samples=None,  # If not None, only return this many samples
                      split='train',
-                     features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'vx', 'vy', 'vz', 'M200c', 'Rvir'],
+                     features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'v_x', 'v_y', 'v_z', 'M200c', 'Rvir'],
                      params=['Omega_m', 'sigma_8'],
                      return_mean_std=False,
                      standardize=True,
                      seed=42,
-                     tfrecords_path= '/quijote_tfrecords_consistent_trees',
+                     tfrecords_path= '/home/jballa/galaxies/quijote_tfrecords_consistent_trees',
                      include_tpcf=False
                      ):
 

@@ -171,8 +171,8 @@ class GraphWrapper(nn.Module):
             st_graph = get_equivariant_graph(
                 node_features=nodes,
                 positions=positions,
-                velocities=None,
-                steerable_velocities=False,
+                velocities=velocities,
+                steerable_velocities=True,
                 senders=x.senders,
                 receivers=x.receivers,
                 n_node=x.n_node,
@@ -337,7 +337,7 @@ def run_expt(
     if feats == 'pos':
         features = ['x', 'y', 'z']
     elif feats == 'all':
-        features = ['x', 'y', 'z', 'vx', 'vy', 'vz']
+        features = ['x', 'y', 'z', 'v_x', 'v_y', 'v_z']
     else:
         raise NotImplementedError
 
@@ -381,9 +381,9 @@ def run_expt(
     print('Train-Val-Test split:', n_train, n_val, n_test)
 
     if use_tpcf == "small":
-        tpcf_idx = list(range(8))
+        tpcf_idx = list(range(6))
     elif use_tpcf == "large":
-        tpcf_idx = list(range(15, 24))
+        tpcf_idx = list(range(13, 24))
     else:
         tpcf_idx = list(range(24))
 
