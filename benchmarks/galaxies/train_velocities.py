@@ -24,7 +24,7 @@ import e3nn_jax as e3nn
 import jraph
 
 
-from dataset_large import get_halo_dataset
+from dataset import get_halo_dataset
 from models.gnn import GNN
 from models.segnn import SEGNN
 from models.utils.graph_utils import build_graph
@@ -47,7 +47,7 @@ unreplicate = flax.jax_utils.unreplicate
 def get_iterators(
     training_set_size,
     features=["x", "y", "z", "v_x", "v_y", "v_z"],
-    tfrecords_path="/pscratch/sd/c/cuesta/quijote_tfrecords",
+    tfrecords_path="/quijote_tfrecords",
     batch_size=64,
 ):
     dataset, _, _, std, _, _ = get_halo_dataset(
@@ -313,9 +313,9 @@ if __name__ == "__main__":
     parser.add_argument("--training_set_size", type=int, default=1248)
     parser.add_argument("--fraction_masked", type=float, default=1.0)
     args = parser.parse_args()
-    tfrecords_path = "/pscratch/sd/c/cuesta/quijote_tfrecords_consistent_trees"
+    tfrecords_path = "/quijote_tfrecords"
     output_path = Path(
-        "/global/u1/c/cuesta/eqnn-jax/benchmarks/galaxies/velocity_task_consistent_trees/"
+        "/eqnn-jax/benchmarks/galaxies/velocity_task_consistent_trees/"
     )
     output_path.mkdir(parents=True, exist_ok=True)
 

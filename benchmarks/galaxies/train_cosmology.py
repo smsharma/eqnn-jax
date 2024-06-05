@@ -35,12 +35,11 @@ from models.utils.equivariant_graph_utils import get_equivariant_graph
 from models.mlp import MLP
 from models.gnn import GNN
 from models.egnn import EGNN
-# from models.equivariant_transformer import EquivariantTransformer
 from models.segnn import SEGNN
 from models.nequip import NequIP
 from models.diffpool import DiffPool
 
-from benchmarks.galaxies.dataset_large import get_halo_dataset, generate_tpcfs
+from benchmarks.galaxies.dataset import get_halo_dataset
 
 MLP_PARAMS = {
     "feature_sizes": [128, 128, 128, 2],
@@ -52,7 +51,7 @@ GNN_PARAMS = {
     "message_passing_steps": 3,
     "message_passing_agg": "mean",
     "activation": "gelu",
-    "norm": "layer",
+    "norm": "none",
     "task": "graph",
     "n_outputs": 2,
     "readout_agg": "mean",
@@ -66,7 +65,7 @@ EGNN_PARAMS = {
     "d_hidden": 128,
     "n_layers": 3,
     "activation": "gelu",
-    "soft_edges": True,
+    "soft_edges": False,
     "positions_only": True,
     "tanh_out": False,
     "decouple_pos_vel_updates": True,
@@ -172,7 +171,7 @@ class GraphWrapper(nn.Module):
                 node_features=nodes,
                 positions=positions,
                 velocities=velocities,
-                steerable_velocities=True,
+                steerable_velocities=False,
                 senders=x.senders,
                 receivers=x.receivers,
                 n_node=x.n_node,
@@ -311,7 +310,7 @@ def run_expt(
     use_tpcf="none",
     n_steps=1000,
     batch_size=32,
-    n_train=960, 
+    n_train=1248, 
     n_val=512, 
     n_test=512, 
     learning_rate=3e-4,
@@ -327,7 +326,7 @@ def run_expt(
     experiments_base_dir = Path(__file__).parent / "experiments/"
     d_hidden = param_dict["d_hidden"]
     experiment_id = (
-        f"{model_name}_N={n_train}_tpcf=" + use_tpcf
+        f"{model_name}_N={n_train}_tpcf=" + use_tpcf 
     )
 
     current_experiment_dir = experiments_base_dir / experiment_id
@@ -342,14 +341,15 @@ def run_expt(
         raise NotImplementedError
 
     train_dataset, n_train, _, std, _, _ = get_halo_dataset(batch_size=batch_size,  # Batch size
-                                                                num_samples=n_train,  # If not None, will only take a subset of the dataset
-                                                                split='train',  # 'train', 'val', 'test'
-                                                                standardize=True,  # If True, will standardize the features
-                                                                return_mean_std=True,  # If True, will return (dataset, num_total, mean, std, mean_params, std_params), else (dataset, num_total)
-                                                                seed=42,  # Random seed
-                                                                features=features,  # Features to include
-                                                                params=target,  # Parameters to include
-                                                                include_tpcf=True
+                                                            num_samples=n_train,  # If not None, will only take a subset of the dataset
+                                                            split='train',  # 'train', 'val', 'test'
+                                                            standardize=True,  # If True, will standardize the features
+                                                            return_mean_std=True,  # If True, will return (dataset, num_total, mean, std, mean_params, std_params), else (dataset, num_total)
+                                                            seed=42,  # Random seed
+                                                            features=features,  # Features to include
+                                                            params=target,  # Parameters to include
+                                                            include_tpcf=True,
+                                                            tfrecords_path=data_dir
                                                             )
     std = std.numpy()
     train_iter = iter(train_dataset)
@@ -364,7 +364,8 @@ def run_expt(
                                            seed=42,
                                            features=features, 
                                            params=target,
-                                           include_tpcf=True
+                                           include_tpcf=True,
+                                           tfrecords_path=data_dir
                                         )
 
     test_dataset, n_test = get_halo_dataset(batch_size=batch_size,  
@@ -375,7 +376,8 @@ def run_expt(
                                            seed=42,
                                            features=features, 
                                            params=target,
-                                           include_tpcf=True
+                                           include_tpcf=True,
+                                           tfrecords_path=data_dir
                                         )
 
     print('Train-Val-Test split:', n_train, n_val, n_test)
@@ -576,7 +578,7 @@ def run_expt(
                 text_file.write(f"Test loss: {test_loss_ckp}\n")
         
     
-def main(model, feats, lr, decay, steps, batch_size, n_train, use_tpcf, k):
+def main(model, feats, lr, decay, steps, batch_size, n_train, use_tpcf, k, data_dir):
     if model == 'MLP':
         MLP_PARAMS['d_hidden'] = MLP_PARAMS['feature_sizes'][0]
         params = MLP_PARAMS
@@ -609,8 +611,6 @@ def main(model, feats, lr, decay, steps, batch_size, n_train, use_tpcf, k):
     else:
         raise NotImplementedError
 
-    data_dir = Path(__file__).parent / "data/"
-
     run_expt(
         model,
         feats,
@@ -621,7 +621,7 @@ def main(model, feats, lr, decay, steps, batch_size, n_train, use_tpcf, k):
         n_steps=steps,
         batch_size=batch_size,
         n_train=n_train,
-        use_tpcf=use_tpcf,
+        use_tpcf=use_tpcf
     )
 
 if __name__ == "__main__":
@@ -635,7 +635,6 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, help="Number of steps", default=5000)
     parser.add_argument("--batch_size", type=int, help="Batch size", default=32)
     parser.add_argument("--n_train", type=int, help="Number of training samples", default=1000)
-
     parser.add_argument(
         "--use_tpcf",
         type=str,
@@ -646,6 +645,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--k", type=int, help="Number of neighbors for kNN graph", default=10
     )
+    parser.add_argument("--data_dir", type=str, help="Path to Quijote records", default='/quijote_tfrecords')
+
     args = parser.parse_args()
 
     K = args.k

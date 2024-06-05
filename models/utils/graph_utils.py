@@ -20,7 +20,6 @@ def get_apply_pbc(std: np.array=None, cell: np.array = np.array(
 ):
     if std is not None:
         cell = cell / std[:3]
-        # cell -= 0.5 / std[:3]
 
     def apply_pbc(
         dr: np.array,
@@ -183,9 +182,6 @@ def neighbors_within_radius(
         dr = apply_pbc(dr)
     # Calculate the distance matrix
     distance_matrix = np.sum(dr**2, axis=-1)
-    # adj = distance_matrix <= r**2
-
-    # return distance_matrix, adj.astype(np.int32)
 
     # Get adjacency matrix based on radial cutoff
     mask = (distance_matrix <= r**2) & (distance_matrix > 0)  # Excludes self-loops
