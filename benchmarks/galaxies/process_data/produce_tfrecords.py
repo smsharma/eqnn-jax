@@ -213,12 +213,12 @@ def process_data_to_tfrecords(params_df, data_dir, tfrecords_path, num_tfrecords
 if __name__ == '__main__':
     use_consistent_trees = True
     if use_consistent_trees:
-        data_dir = Path('/pscratch/sd/c/cuesta/quijote_bsq_consistent_trees/')
-        tfrecords_path = Path('/pscratch/sd/c/cuesta/quijote_tfrecords_consistent_trees/')
+        data_dir = Path('/quijote_bsq_consistent_trees/')
+        tfrecords_path = Path('/quijote_tfrecords/')
         snapshot = 1.
     else:
-        data_dir = Path('/pscratch/sd/c/cuesta/quijote_bsq/')
-        tfrecords_path = Path('/pscratch/sd/c/cuesta/quijote_tfrecords/')
+        data_dir = Path('/quijote_bsq/')
+        tfrecords_path = Path('/quijote_tfrecords/')
         snapshot = 10
     params_names = ['Omega_m', 'Omega_b', 'h', 'n_s', 'sigma_8']
     params_df = read_cosmologies()
