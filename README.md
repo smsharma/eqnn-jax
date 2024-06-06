@@ -37,6 +37,19 @@ pytest .
 
 See [`notebooks/examples.ipynb`](./notebooks/examples.ipynb) for example usage of GNN, SEGNN, NequIP, and EGNN.
 
+## Cosmological benchmark
+
+The TFRecord dataset can be downloaded [here](https://doi.org/10.5281/zenodo.11479419).
+
+To run the graph-level task:
+```bash
+   python benchmarks/galaxies/train_cosmology.py
+```
+To run the node-level task:
+```bash
+   python benchmarks/galaxies/train_velocities.py
+```
+
 ## Attribution
 
 See [CITATION.cff](./CITATION.cff) for citation information. The implementation of SEGNN was partially inspired by [segnn-jax](https://github.com/gerkone/segnn-jax).
