@@ -39,15 +39,18 @@ See [`notebooks/examples.ipynb`](./notebooks/examples.ipynb) for example usage o
 
 ## Cosmological benchmark
 
-The TFRecord dataset can be downloaded [here](https://doi.org/10.5281/zenodo.11479419).
+The cosmological benchmarking dataset, available in TFRecord format, can be downloaded from Zenodo under the DOI [10.5281/zenodo.11479419](https://doi.org/10.5281/zenodo.11479419). To download the dataset into `benchmarks/galaxies/quijote_records`, run:
+```bash
+bash benchmarks/galaxies/download_tfrecords.sh
+```
 
 To run the graph-level task:
 ```bash
-   python benchmarks/galaxies/train_cosmology.py
+python benchmarks/galaxies/train_cosmology.py
 ```
 To run the node-level task:
 ```bash
-   python benchmarks/galaxies/train_velocities.py
+python benchmarks/galaxies/train_velocities.py
 ```
 
 ## Attribution
