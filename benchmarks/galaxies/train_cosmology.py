@@ -21,6 +21,8 @@ import jax.numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import pickle
+import json
+import os
 
 import jraph
 import e3nn_jax as e3nn
@@ -326,13 +328,13 @@ def run_expt(
     experiments_base_dir = Path(__file__).parent / "experiments/"
     d_hidden = param_dict["d_hidden"]
     experiment_id = (
-        f"{model_name}_N={n_train}_tpcf=" + use_tpcf 
+        f"{model_name}_N={n_train}_tpcf=" + use_tpcf
     )
-
     current_experiment_dir = experiments_base_dir / experiment_id
     current_experiment_dir.mkdir(parents=True, exist_ok=True)
-
+    
     print('Loading dataset...')
+    
     if feats == 'pos':
         features = ['x', 'y', 'z']
     elif feats == 'all':
@@ -634,7 +636,7 @@ if __name__ == "__main__":
     parser.add_argument("--decay", type=float, help="Weight decay", default=1e-5)
     parser.add_argument("--steps", type=int, help="Number of steps", default=5000)
     parser.add_argument("--batch_size", type=int, help="Batch size", default=32)
-    parser.add_argument("--n_train", type=int, help="Number of training samples", default=1000)
+    parser.add_argument("--n_train", type=int, help="Number of training samples", default=1248)
     parser.add_argument(
         "--use_tpcf",
         type=str,
@@ -645,7 +647,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--k", type=int, help="Number of neighbors for kNN graph", default=10
     )
-    parser.add_argument("--data_dir", type=str, help="Path to Quijote records", default='/quijote_tfrecords')
+    parser.add_argument("--data_dir", type=str, help="Path to Quijote records", default='quijote_records')
 
     args = parser.parse_args()
 

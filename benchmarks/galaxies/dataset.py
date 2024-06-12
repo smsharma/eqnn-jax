@@ -1,6 +1,12 @@
 from functools import partial
 import tensorflow as tf
 import numpy as np
+import json
+from tqdm import tqdm
+import requests
+import zipfile
+import shutil
+import os
 from pycorr import (
     TwoPointCorrelationFunction,
 )  # Can install it here https://github.com/cosmodesi/pycorr
@@ -22,11 +28,11 @@ STD_TPCF_VEC = [8.37356624, 2.36190046, 1.15493691, 0.73567994, 0.52609708, 0.40
                 0.16773013, 0.15968612, 0.15186733, 0.14234885, 0.13153203, 0.11954234,
                 0.10549666, 0.09024256, 0.07655078, 0.06350282, 0.05210615, 0.0426435]
 
-def _parse_function(proto, features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'v_x', 'v_y', 'v_z', 'M200c'], 
+
+def _parse_function(proto, features=['x', 'y', 'z', 'J_x', 'J_y', 'J_z', 'v_x', 'v_y', 'v_z', 'M200c'], 
                     params=['Omega_m', 'Omega_b', 'h', 'n_s', 'sigma_8'],
                     include_tpcf=False):
     
-    # Define your tfrecord again. It must match with how you wrote it
     keys_to_features = {k: tf.io.FixedLenFeature([], tf.string) for k in features}
     keys_to_params = {k: tf.io.FixedLenFeature([], tf.string) for k in params}
 
@@ -52,22 +58,21 @@ def _parse_function(proto, features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'v_x', 'v_
 
     return stacked_features, stacked_params
     
-
 def get_halo_dataset(batch_size=64, 
                      num_samples=None,  # If not None, only return this many samples
                      split='train',
-                     features=['x', 'y', 'z', 'Jx', 'Jy', 'Jz', 'v_x', 'v_y', 'v_z', 'M200c', 'Rvir'],
+                     features=['x', 'y', 'z', 'J_x', 'J_y', 'J_z', 'v_x', 'v_y', 'v_z', 'M200c'],
                      params=['Omega_m', 'sigma_8'],
                      return_mean_std=False,
                      standardize=True,
                      seed=42,
-                     tfrecords_path='/',
+                     tfrecords_path='quijote_records',
                      include_tpcf=False
                      ):
 
     files = tf.io.gfile.glob(f"{tfrecords_path}/halos*{split}*.tfrecord")
     dataset = tf.data.TFRecordDataset(files)
-
+    
     if num_samples is not None:
         dataset = dataset.take(num_samples)
         num_total = num_samples  # Adjust num_total if num_samples is specified
