@@ -72,7 +72,7 @@ class PointNet(nn.Module):
     def __call__(self, x, return_assignments=True): 
         # If graph prediction task, collect pooled embeddings at each hierarchy level
         if self.task == "graph":
-            x_pool = jnp.zeros((self.n_downsamples, self.gnn_kwargs['d_output']))
+            x_pool = jnp.zeros((self.n_downsamples, self.gnn_kwargs['n_outputs']))
 
         assignments = []
         node_pos = x.nodes[..., :3]

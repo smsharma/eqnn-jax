@@ -40,8 +40,10 @@ from models.egnn import EGNN
 from models.segnn import SEGNN
 from models.nequip import NequIP
 from models.diffpool import DiffPool
+from models.pointnet import PointNet
 
-from benchmarks.galaxies.dataset import get_halo_dataset
+from benchmarks.galaxies.dataset import get_halo_dataset, STD_PARAMS_DICT
+
 
 MLP_PARAMS = {
     "feature_sizes": [128, 128, 128, 2],
@@ -50,7 +52,7 @@ MLP_PARAMS = {
 GNN_PARAMS = {
     "d_hidden": 128,
     "n_layers": 3,
-    "message_passing_steps": 3,
+    "message_passing_steps": 8,
     "message_passing_agg": "mean",
     "activation": "gelu",
     "norm": "none",
@@ -63,7 +65,7 @@ GNN_PARAMS = {
 }
 
 EGNN_PARAMS = {
-    "message_passing_steps": 3,
+    "message_passing_steps": 4,
     "d_hidden": 128,
     "n_layers": 3,
     "activation": "gelu",
@@ -86,7 +88,7 @@ DIFFPOOL_PARAMS = {
     "combine_hierarchies_method": "mean",
     "use_edge_features": True,
     "task": "graph",
-    "mlp_readout_widths": [8, 2, 2],
+    "mlp_readout_widths": [8, 2],
 }
 
 POINTNET_PARAMS = {
@@ -97,19 +99,20 @@ POINTNET_PARAMS = {
     "combine_hierarchies_method": "mean",
     "use_edge_features": True,
     "task": "graph",
-    "mlp_readout_widths": [8, 2, 2],
+    "mlp_readout_widths": [4, 2, 2],
+    "n_outputs": 2,
+    "k": 10,
 }
 
 SEGNN_PARAMS = {
     "d_hidden": 128,
     "n_layers": 3,
-    "message_passing_steps": 3,
+    "message_passing_steps": 8,
     "message_passing_agg": "mean",
     "scalar_activation": "gelu",
     "gate_activation": "sigmoid",
     "task": "graph",
     "n_outputs": 2,
-    "output_irreps": e3nn.Irreps("1x0e"),
     "readout_agg": "mean",
     "mlp_readout_widths": (4, 2, 2),
     "l_max_hidden": 2,
@@ -121,8 +124,7 @@ NEQUIP_PARAMS = {
     "d_hidden": 128,
     "l_max":1,
     "sphharm_norm": 'integral',
-    "irreps_out": e3nn.Irreps("1x0e"),
-    "message_passing_steps": 3,
+    "message_passing_steps": 4,
     "n_layers": 3,
     "message_passing_agg": "mean",
     "readout_agg": "mean",
@@ -211,7 +213,6 @@ class GraphWrapper(nn.Module):
 
 
 def loss_mse(pred_batch, cosmo_batch):
-    # return np.mean((pred_batch - cosmo_batch) ** 2)
     return np.mean((pred_batch - cosmo_batch) ** 2, axis=0)
 
 
@@ -312,7 +313,7 @@ def run_expt(
     use_tpcf="none",
     n_steps=1000,
     batch_size=32,
-    n_train=1248, 
+    n_train=2048, 
     n_val=512, 
     n_test=512, 
     learning_rate=3e-4,
@@ -531,10 +532,14 @@ def run_expt(
             # if early_stop.should_stop:
             #     print(f'Met early stopping criteria, breaking at epoch {step}')
             # break
+
+        # Rescale losses by multiplying by variances, since we normalize during training
+        loss_rescaling = np.array([STD_PARAMS_DICT[param]**2 for param in target])
             
         print(
             "Training done.\n"
             f"Final checkpoint test loss {test_loss_ckp}.\n"
+            f"Final rescaled test loss: {test_loss_ckp * loss_rescaling}.\n"
         )
         
     if plotting:
@@ -586,12 +591,16 @@ def main(model, feats, lr, decay, steps, batch_size, n_train, use_tpcf, k, data_
         params = MLP_PARAMS
     elif model == "GNN":
         params = GNN_PARAMS
+        n_radial_basis = 64
     elif model == "EGNN":
         params = EGNN_PARAMS
+        n_radial_basis = 32
     elif model == "SEGNN":
         params = SEGNN_PARAMS
+        n_radial_basis = 32
     elif model == "NequIP":
         params = NEQUIP_PARAMS
+        n_radial_basis = 64
     elif model == "DiffPool":
         DIFFPOOL_PARAMS["gnn_kwargs"] = {
             "d_hidden": 64,
@@ -602,14 +611,14 @@ def main(model, feats, lr, decay, steps, batch_size, n_train, use_tpcf, k, data_
         DIFFPOOL_PARAMS["d_hidden"] = DIFFPOOL_PARAMS["gnn_kwargs"]["d_hidden"]
         params = DIFFPOOL_PARAMS
     elif model == "PointNet":
-        POINTNET_PARAMS["gnn_kwargs"] = {
-            "d_hidden": 64,
-            "n_layers": 4,
-            "message_passing_steps": 3,
-            "task": "node",
-        }
+        GNN_PARAMS["n_outputs"] = GNN_PARAMS["d_hidden"]
+        GNN_PARAMS["message_passing_steps"] = 3
+        GNN_PARAMS["n_layers"] = 4
+        GNN_PARAMS["task"] = "node"
+        POINTNET_PARAMS["gnn_kwargs"] = GNN_PARAMS
         POINTNET_PARAMS["d_hidden"] = POINTNET_PARAMS["gnn_kwargs"]["d_hidden"]
         params = POINTNET_PARAMS
+        n_radial_basis = 32
     else:
         raise NotImplementedError
 
@@ -623,7 +632,8 @@ def main(model, feats, lr, decay, steps, batch_size, n_train, use_tpcf, k, data_
         n_steps=steps,
         batch_size=batch_size,
         n_train=n_train,
-        use_tpcf=use_tpcf
+        use_tpcf=use_tpcf,
+        n_radial_basis=n_radial_basis
     )
 
 if __name__ == "__main__":
@@ -636,7 +646,7 @@ if __name__ == "__main__":
     parser.add_argument("--decay", type=float, help="Weight decay", default=1e-5)
     parser.add_argument("--steps", type=int, help="Number of steps", default=5000)
     parser.add_argument("--batch_size", type=int, help="Batch size", default=32)
-    parser.add_argument("--n_train", type=int, help="Number of training samples", default=1248)
+    parser.add_argument("--n_train", type=int, help="Number of training samples", default=2048)
     parser.add_argument(
         "--use_tpcf",
         type=str,
