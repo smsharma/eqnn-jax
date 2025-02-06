@@ -49,7 +49,6 @@ def get_edge_mlp_updates(
             normalize=True,
             normalization=sphharm_norm,
         )
-        m_ij = e3nn.concatenate([m_ij, a_ij])
         m_ij = tensor_product(m_ij, a_ij)
 
         # Radial
